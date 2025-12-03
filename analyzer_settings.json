@@ -1,0 +1,50 @@
+{
+    "yield_settings": {
+        "생산일자": true,
+        "공장": true,
+        "공정코드": true,
+        "품명": true,
+        "신규분류요약": true,
+        "함수율": false,
+        "기계코드": false,
+        "사출기계코드": false,
+        "공정기계코드": false,
+        "불량명": false
+    },
+    "util_settings": {
+        "생산일자": true,
+        "공장": true,
+        "공정코드": true,
+        "품명": false,
+        "신규분류요약": false,
+        "함수율": false,
+        "기계코드": true,
+        "사출기계코드": false,
+        "공정기계코드": false,
+        "불량명": false
+    },
+    "target_settings": {
+        "생산일자": true,
+        "공장": true,
+        "공정코드": true,
+        "품명": false,
+        "신규분류요약": false,
+        "함수율": false,
+        "기계코드": false,
+        "사출기계코드": false,
+        "공정기계코드": false,
+        "불량명": false
+    },
+    "defect_settings": {
+        "생산일자": true,
+        "공장": true,
+        "공정코드": true,
+        "품명": false,
+        "신규분류요약": true,
+        "함수율": false,
+        "기계코드": true,
+        "사출기계코드": true,
+        "공정기계코드": true,
+        "불량명": true
+    }
+}
