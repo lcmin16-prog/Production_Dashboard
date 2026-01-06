@@ -7,6 +7,7 @@ import numpy as np
 import os
 import re
 import io
+from pathlib import Path
 from datetime import date, timedelta
 from typing import Dict, List, Optional, Tuple, Any, Union
 from chart_utils import (
@@ -45,6 +46,28 @@ window.addEventListener('resize', adjustZoom);
 def load_all_data() -> Dict[str, Tuple[pd.DataFrame, Optional[str]]]:
     """파일 로딩 및 데이터 전처리"""
     data_frames = {}
+    def read_data_file(file_path: str) -> pd.DataFrame:
+        file_ext = os.path.splitext(file_path)[1].lower()
+        if file_ext == '.csv':
+            df = pd.read_csv(file_path, encoding='utf-8-sig', thousands=',', skip_blank_lines=True)
+            df = df.loc[:, ~df.columns.str.contains('^Unnamed', na=False)]
+            df = df.dropna(axis=1, how='all')
+            df.columns = df.columns.str.strip()
+        else:
+            try:
+                df = pd.read_excel(file_path, engine='openpyxl')
+            except Exception:
+                df = pd.read_csv(file_path, encoding='utf-8-sig', thousands=',', skip_blank_lines=True)
+                df = df.loc[:, ~df.columns.str.contains('^Unnamed', na=False)]
+                df = df.dropna(axis=1, how='all')
+                df.columns = df.columns.str.strip()
+
+        for col in df.columns:
+            if df[col].dtype == 'object' and ('%' in str(df[col].iloc[0]) if not df[col].empty and df[col].iloc[0] is not None else False):
+                df[col] = df[col].astype(str).str.replace('%', '', regex=False).str.strip()
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        return df
+
     keywords = {
         'target': '목표달성율', 
         'yield': '수율', 
@@ -57,38 +80,64 @@ def load_all_data() -> Dict[str, Tuple[pd.DataFrame, Optional[str]]]:
 
     for key, keyword_info in keywords.items():
         try:
-            relevant_files = []
+            csv_files = []
+            xlsx_files = []
+
             for f in all_files_in_dir:
                 filename_without_ext, ext = os.path.splitext(f)
-                
-                if ext.lower() not in ['.xlsx', '.xls']:
+
+                # CSV와 Excel 파일 모두 지원
+                if ext.lower() not in ['.csv', '.xlsx', '.xls']:
                     continue
-                
+
                 normalized_name = filename_without_ext.replace("(", "").replace(")", "").replace(" ", "")
 
+                # 키워드 매칭
+                is_match = False
                 if key == 'defect':
                     kw_base, kw_opt = keyword_info
                     if kw_base in normalized_name and kw_opt in normalized_name:
-                        relevant_files.append(f)
+                        is_match = True
                 else:
                     if keyword_info in normalized_name:
-                        relevant_files.append(f)
+                        is_match = True
+
+                # 파일 형식별로 분류
+                if is_match:
+                    if ext.lower() == '.csv':
+                        csv_files.append(f)
+                    else:
+                        xlsx_files.append(f)
+
+            # CSV 파일을 우선 선택
+            relevant_files = csv_files if csv_files else xlsx_files
 
             if relevant_files:
-                # (간편) 버전을 우선 선택, 없으면 최신 파일 선택
-                simple_files = [f for f in relevant_files if '간편' in f]
-                if simple_files:
-                    latest_file = max(simple_files, key=lambda f: os.path.getmtime(os.path.join(current_directory, f)))
-                else:
-                    latest_file = max(relevant_files, key=lambda f: os.path.getmtime(os.path.join(current_directory, f)))
+                if key == 'yield':
+                    year_pattern = re.compile(r"\(수율\)\(\d{4}년\)")
+                    yearly_csv_files = [f for f in csv_files if year_pattern.search(f)]
+                    yearly_xlsx_files = [f for f in xlsx_files if year_pattern.search(f)]
+                    yearly_files = yearly_csv_files if yearly_csv_files else yearly_xlsx_files
+                    if yearly_files:
+                        loaded_files = []
+                        dfs = []
+                        for f in sorted(yearly_files):
+                            file_path = os.path.join(current_directory, f)
+                            df = read_data_file(file_path)
+                            dfs.append(df)
+                            loaded_files.append(f)
+                        combined_df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+                        data_frames[key] = (combined_df, ", ".join(loaded_files))
+                        continue
+
+                # (간편) 표기가 없는 최신 파일을 우선 선택
+                non_simple_files = [f for f in relevant_files if '간편' not in f]
+                search_pool = non_simple_files if non_simple_files else relevant_files
+                latest_file = max(search_pool, key=lambda f: os.path.getmtime(os.path.join(current_directory, f)))
+
                 file_path = os.path.join(current_directory, latest_file)
-                df = pd.read_excel(file_path, engine=None)
-                
-                for col in df.columns:
-                    if df[col].dtype == 'object' and ('%' in str(df[col].iloc[0]) if not df[col].empty and df[col].iloc[0] is not None else False):
-                        df[col] = df[col].astype(str).str.replace('%', '', regex=False).str.strip()
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                
+                df = read_data_file(file_path)
+
                 if key == 'defect':
                     cols = pd.Series(df.columns)
                     for dup in cols[cols.duplicated()].unique():
@@ -148,10 +197,155 @@ def analyze_defect_data(df: pd.DataFrame) -> str:
 # --- 상수 정의 (chart_styles.json에서 로드) ---
 PROCESS_MASTER_ORDER = ['[10] 사출조립', '[20] 분리', '[45] 하이드레이션/전면검사', '[55] 접착/멸균', '[80] 누수/규격검사']
 FACTORY_COLOR_MAP = CHART_STYLES["colors"]["factory_colors"]  # JSON에서 로드
+DEFAULT_FACTORY_COLOR = CHART_STYLES["colors"].get("default_color", "#888888")
 CHART_HEIGHT = CHART_STYLES["chart_config"]["default_height"]  # JSON에서 로드
 TEXT_FONT_SIZE = CHART_STYLES["chart_config"]["text_font_size"]  # JSON에서 로드
 
-# --- Helper Functions ---
+FACTORY_DEFINITIONS: Dict[str, str] = {
+    "A관": "1공장",
+    "C관": "2공장",
+    "S관": "3공장",
+}
+FACTORY_DISPLAY_LABELS: Dict[str, str] = {
+    code: f"{code} ({name})" for code, name in FACTORY_DEFINITIONS.items()
+}
+FACTORY_DISPLAY_CHOICES: List[str] = [FACTORY_DISPLAY_LABELS[code] for code in FACTORY_DEFINITIONS]
+FACTORY_DISPLAY_TO_CODE: Dict[str, str] = {label: code for code, label in FACTORY_DISPLAY_LABELS.items()}
+
+BASE_DIR = Path(__file__).resolve().parent
+WORKFORCE_FILE_PATH = BASE_DIR / "workforce_master.xlsx"
+EXCLUDED_WORKING_DAYS_PATH = BASE_DIR / "년월별 제외근무일수.csv"
+WORKFORCE_SHEET_COLUMNS: Dict[str, List[str]] = {
+    "배치운영": ["공장", "공정", "필요인원", "배치인원", "근무조", "신규투입", "이동계획"],
+    "근태관리": ["날짜", "공장", "공정", "지각", "결근", "휴가", "특근", "비고"],
+    "생산성": ["공장", "공정", "UPH", "UPPH", "평균작업시간(분)", "효율(%)", "잔업시간", "특근생산성"],
+    "교육자격": ["공장", "이름", "부서", "교육명", "수료일", "만료일", "상태"],
+    "수급계획": ["월", "공장", "예상수요", "가용인원", "외주/채용계획", "코멘트"],
+    "비용관리": ["공장", "부서", "기본급합계", "잔업비", "특근비", "총인건비"],
+    "현장이슈": ["날짜", "공장", "유형", "내용", "심각도", "조치현황"],
+}
+DEFAULT_WORKFORCE_DATA: Dict[str, List[Dict[str, Any]]] = {
+    "배치운영": [
+        {"공장": "A관", "공정": "사출", "필요인원": 24, "배치인원": 22, "근무조": "A/B", "신규투입": 2, "이동계획": "B조 1명 증원"},
+        {"공장": "C관", "공정": "조립", "필요인원": 18, "배치인원": 18, "근무조": "주/야", "신규투입": 1, "이동계획": "야간 1명 교육"},
+        {"공장": "S관", "공정": "검사", "필요인원": 14, "배치인원": 12, "근무조": "주간", "신규투입": 0, "이동계획": "라인 다기능화"},
+        {"공장": "S관", "공정": "포장", "필요인원": 10, "배치인원": 11, "근무조": "2교대", "신규투입": 0, "이동계획": "여유 인원 검사 지원"},
+    ],
+    "근태관리": [
+        {"날짜": "2025-01-02", "공장": "A관", "공정": "사출", "지각": 1, "결근": 0, "휴가": 2, "특근": 1, "비고": "설비 점검"},
+        {"날짜": "2025-01-02", "공장": "C관", "공정": "조립", "지각": 0, "결근": 1, "휴가": 1, "특근": 0, "비고": ""},
+        {"날짜": "2025-01-03", "공장": "S관", "공정": "검사", "지각": 0, "결근": 0, "휴가": 1, "특근": 1, "비고": "증가 요청"},
+        {"날짜": "2025-01-03", "공장": "S관", "공정": "포장", "지각": 2, "결근": 0, "휴가": 0, "특근": 1, "비고": "폭설 영향"},
+    ],
+    "생산성": [
+        {"공장": "A관", "공정": "사출", "UPH": 145, "UPPH": 6.2, "평균작업시간(분)": 48, "효율(%)": 92, "잔업시간": 1.5, "특근생산성": 138},
+        {"공장": "C관", "공정": "조립", "UPH": 110, "UPPH": 5.1, "평균작업시간(분)": 54, "효율(%)": 88, "잔업시간": 2.0, "특근생산성": 120},
+        {"공장": "S관", "공정": "검사", "UPH": 90, "UPPH": 4.8, "평균작업시간(분)": 60, "효율(%)": 95, "잔업시간": 0.5, "특근생산성": 98},
+        {"공장": "S관", "공정": "포장", "UPH": 130, "UPPH": 5.5, "평균작업시간(분)": 52, "효율(%)": 89, "잔업시간": 1.0, "특근생산성": 133},
+    ],
+    "교육자격": [
+        {"공장": "A관", "이름": "김현수", "부서": "사출", "교육명": "금형 안전", "수료일": "2024-11-05", "만료일": "2025-11-05", "상태": "정상"},
+        {"공장": "S관", "이름": "이서연", "부서": "검사", "교육명": "품질 검사", "수료일": "2024-08-12", "만료일": "2025-08-12", "상태": "만료예정"},
+        {"공장": "C관", "이름": "박지훈", "부서": "조립", "교육명": "라인 다기능", "수료일": "2023-12-01", "만료일": "2025-01-31", "상태": "갱신필요"},
+    ],
+    "수급계획": [
+        {"월": "2025-01", "공장": "A관", "예상수요": 24, "가용인원": 22, "외주/채용계획": "야간 계약직 2명", "코멘트": "설비 증설 대응"},
+        {"월": "2025-01", "공장": "C관", "예상수요": 23, "가용인원": 22, "외주/채용계획": "사내 다기능화", "코멘트": "주간 안정화"},
+        {"월": "2025-01", "공장": "S관", "예상수요": 23, "가용인원": 22, "외주/채용계획": "단기 외주 1팀", "코멘트": "포장 캐파 확대"},
+        {"월": "2025-02", "공장": "A관", "예상수요": 25, "가용인원": 24, "외주/채용계획": "계약연장 협의", "코멘트": "수요 증가 대비"},
+        {"월": "2025-02", "공장": "C관", "예상수요": 24, "가용인원": 23, "외주/채용계획": "경력직 1명 채용", "코멘트": "신규 라인 준비"},
+        {"월": "2025-02", "공장": "S관", "예상수요": 25, "가용인원": 24, "외주/채용계획": "주야 교대 보강", "코멘트": "성수기 대비"},
+    ],
+    "비용관리": [
+        {"공장": "A관", "부서": "사출", "기본급합계": 28000, "잔업비": 4200, "특근비": 1800, "총인건비": 34000},
+        {"공장": "C관", "부서": "조립", "기본급합계": 22000, "잔업비": 3800, "특근비": 2200, "총인건비": 28000},
+        {"공장": "S관", "부서": "검사", "기본급합계": 16000, "잔업비": 2100, "특근비": 900, "총인건비": 19000},
+        {"공장": "S관", "부서": "포장", "기본급합계": 14000, "잔업비": 1700, "특근비": 800, "총인건비": 16500},
+    ],
+    "현장이슈": [
+        {"날짜": "2025-01-05", "공장": "A관", "유형": "이탈", "내용": "야간조 2명 퇴사 예정", "심각도": "높음", "조치현황": "면담 및 충원 진행"},
+        {"날짜": "2025-01-06", "공장": "S관", "유형": "안전", "내용": "포장 라인 경미한 안전사고", "심각도": "중간", "조치현황": "현장 재교육"},
+        {"날짜": "2025-01-07", "공장": "C관", "유형": "만족도", "내용": "조립 야간조 근무 만족도 하락", "심각도": "중간", "조치현황": "휴게 환경 개선"},
+    ],
+}
+def ensure_workforce_master() -> None:
+    WORKFORCE_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if WORKFORCE_FILE_PATH.exists():
+        return
+
+    with pd.ExcelWriter(WORKFORCE_FILE_PATH, engine="openpyxl") as writer:
+        for sheet_name, columns in WORKFORCE_SHEET_COLUMNS.items():
+            rows = DEFAULT_WORKFORCE_DATA.get(sheet_name, [])
+            df = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame(columns=columns)
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+
+def load_workforce_data() -> Dict[str, pd.DataFrame]:
+    ensure_workforce_master()
+    data: Dict[str, pd.DataFrame] = {}
+    workbook = pd.ExcelFile(WORKFORCE_FILE_PATH)
+    for sheet_name, columns in WORKFORCE_SHEET_COLUMNS.items():
+        if sheet_name in workbook.sheet_names:
+            df = pd.read_excel(workbook, sheet_name=sheet_name)
+        else:
+            df = pd.DataFrame(columns=columns)
+        for col in columns:
+            if col not in df.columns:
+                df[col] = pd.NA
+        data[sheet_name] = df[columns]
+    return data
+
+
+def save_workforce_data(data: Dict[str, pd.DataFrame]) -> None:
+    WORKFORCE_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(WORKFORCE_FILE_PATH, engine="openpyxl") as writer:
+        for sheet_name, columns in WORKFORCE_SHEET_COLUMNS.items():
+            df = data.get(sheet_name, pd.DataFrame(columns=columns)).copy()
+            for col in columns:
+                if col not in df.columns:
+                    df[col] = pd.NA
+            df = df[columns]
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+
+def get_workforce_excel_bytes() -> bytes:
+    ensure_workforce_master()
+    return WORKFORCE_FILE_PATH.read_bytes()
+
+
+def handle_workforce_upload(uploaded_file) -> Tuple[bool, str]:
+    if uploaded_file is None:
+        return False, "업로드된 파일이 없습니다."
+    try:
+        WORKFORCE_FILE_PATH.write_bytes(uploaded_file.getbuffer())
+        return True, "엑셀 데이터를 갱신했습니다."
+    except Exception as exc:
+        return False, f"업로드 처리 중 오류가 발생했습니다: {exc}"
+
+
+ensure_workforce_master()
+
+
+@st.cache_data
+def load_excluded_workdays() -> pd.DataFrame:
+    if not EXCLUDED_WORKING_DAYS_PATH.exists():
+        return pd.DataFrame(columns=["년", "월", "제외근무일수"])
+    try:
+        df = pd.read_csv(EXCLUDED_WORKING_DAYS_PATH, encoding="utf-8-sig")
+    except Exception:
+        df = pd.read_csv(EXCLUDED_WORKING_DAYS_PATH)
+    expected_cols = {"년", "월", "제외근무일수"}
+    if not expected_cols.issubset(df.columns):
+        return pd.DataFrame(columns=["년", "월", "제외근무일수"])
+    clean_df = df[list(expected_cols)].copy()
+    clean_df["년"] = pd.to_numeric(clean_df["년"], errors="coerce").astype("Int64")
+    clean_df["월"] = pd.to_numeric(clean_df["월"], errors="coerce").astype("Int64")
+    clean_df["제외근무일수"] = pd.to_numeric(clean_df["제외근무일수"], errors="coerce").fillna(0).astype(int)
+    clean_df = clean_df.dropna(subset=["년", "월"])
+    return clean_df.reset_index(drop=True)
+
+
+
 
 def normalize_process_codes(df: pd.DataFrame) -> pd.DataFrame:
     """공정 컬럼의 값을 표준화하고, 컬럼명을 '공정코드'로 통일하며, 안정성을 높입니다."""
@@ -241,6 +435,180 @@ def get_resampled_data(
         if 'period' not in df_copy.columns: return pd.DataFrame(columns=valid_group_by_cols)
         return df_copy[valid_group_by_cols].drop_duplicates()
     return df_copy.groupby(valid_group_by_cols).agg(agg_dict).reset_index()
+
+def _normalize_personnel_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=PERSONNEL_COLUMNS)
+
+    normalized = df.copy()
+    # 컬럼명을 표준 이름으로 통일
+    rename_map = {col: PERSONNEL_COLUMN_ALIASES[col] for col in normalized.columns if col in PERSONNEL_COLUMN_ALIASES}
+    if rename_map:
+        normalized = normalized.rename(columns=rename_map)
+
+    for col in PERSONNEL_COLUMNS:
+        if col not in normalized.columns:
+            normalized[col] = pd.NA if col == "No." else ""
+
+    normalized = normalized[PERSONNEL_COLUMNS].copy()
+    # 숫자 열과 문자열 열을 구분해 정리
+    normalized["No."] = pd.to_numeric(normalized["No."], errors="coerce")
+    for col in PERSONNEL_COLUMNS:
+        if col == "No.":
+            continue
+        normalized[col] = normalized[col].fillna("").astype(str).str.strip()
+
+    # No.가 비어 있으면 순번 부여
+    missing_no = normalized["No."].isna()
+    if missing_no.any():
+        current_max = normalized["No."].max(skipna=True)
+        next_no = 1 if pd.isna(current_max) else int(current_max) + 1
+        for idx in normalized[missing_no].index:
+            normalized.at[idx, "No."] = next_no
+            next_no += 1
+
+    normalized["No."] = normalized["No."].astype("Int64")
+    return normalized
+
+def load_personnel_data() -> pd.DataFrame:
+    if PERSONNEL_FILE_PATH.exists():
+        try:
+            df = pd.read_csv(PERSONNEL_FILE_PATH, encoding='utf-8-sig')
+        except Exception:
+            df = pd.DataFrame(columns=PERSONNEL_COLUMNS)
+    else:
+        df = pd.DataFrame(columns=PERSONNEL_COLUMNS)
+    return _normalize_personnel_dataframe(df)
+
+def save_personnel_data(df: pd.DataFrame) -> None:
+    normalized = _normalize_personnel_dataframe(df)
+    PERSONNEL_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    normalized.to_csv(PERSONNEL_FILE_PATH, index=False, encoding='utf-8-sig')
+
+def load_personnel_history() -> pd.DataFrame:
+    if PERSONNEL_HISTORY_FILE_PATH.exists():
+        try:
+            df = pd.read_csv(PERSONNEL_HISTORY_FILE_PATH, encoding='utf-8-sig')
+        except Exception:
+            df = pd.read_csv(PERSONNEL_HISTORY_FILE_PATH)
+        rename_map = {
+            col: PERSONNEL_HISTORY_COLUMN_ALIASES[col]
+            for col in df.columns
+            if col in PERSONNEL_HISTORY_COLUMN_ALIASES
+        }
+        if rename_map:
+            df = df.rename(columns=rename_map)
+        for col in PERSONNEL_HISTORY_COLUMNS:
+            if col not in df.columns:
+                df[col] = 0 if col == "등록인원" else ""
+        df = df[PERSONNEL_HISTORY_COLUMNS]
+        df["등록인원"] = pd.to_numeric(df["등록인원"], errors="coerce").fillna(0).astype(int)
+        return df
+    return pd.DataFrame(columns=PERSONNEL_HISTORY_COLUMNS)
+
+def save_personnel_history(df: pd.DataFrame) -> None:
+    normalized = df.copy()
+    normalized = normalized[PERSONNEL_HISTORY_COLUMNS]
+    PERSONNEL_HISTORY_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    normalized.to_csv(PERSONNEL_HISTORY_FILE_PATH, index=False, encoding='utf-8-sig')
+
+def ensure_weekly_personnel_snapshot(registered_df: pd.DataFrame) -> None:
+    if registered_df is None or registered_df.empty:
+        return
+    today = date.today()
+    week_start = today - timedelta(days=today.weekday())
+    snapshot_date = today.strftime("%Y-%m-%d")
+
+    history_df = load_personnel_history()
+    if not history_df.empty:
+        history_dates = (
+            pd.to_datetime(history_df["기준일"], errors="coerce")
+            .dropna()
+            .dt.date
+        )
+        history_week_starts = {
+            d - timedelta(days=d.weekday())
+            for d in history_dates
+            if isinstance(d, date)
+        }
+        if week_start in history_week_starts:
+            return
+
+    summary = (
+        registered_df.groupby(["상위부서명", "부서명"], dropna=False)
+        .size()
+        .reset_index(name="등록인원")
+    )
+    if summary.empty:
+        return
+
+    summary["기준일"] = snapshot_date
+    summary = summary[["기준일", "상위부서명", "부서명", "등록인원"]]
+    history_df = pd.concat([history_df, summary], ignore_index=True)
+    save_personnel_history(history_df)
+
+def build_monthly_headcount_table(history_df: pd.DataFrame, current_summary: pd.DataFrame) -> pd.DataFrame:
+    """상위부서/부서 기준 월별 인원표를 생성합니다."""
+    monthly_records = pd.DataFrame(columns=["기준월", "상위부서명", "부서명", "등록인원"])
+
+    if history_df is not None and not history_df.empty:
+        hist = history_df.copy()
+        hist["기준일"] = pd.to_datetime(hist["기준일"], errors="coerce")
+        hist = hist.dropna(subset=["기준일"])
+        if not hist.empty:
+            hist["기준월"] = hist["기준일"].dt.to_period("M").dt.to_timestamp()
+            hist_monthly = (
+                hist.groupby(["기준월", "상위부서명", "부서명"], dropna=False)["등록인원"]
+                .last()
+                .reset_index()
+            )
+            monthly_records = pd.concat([monthly_records, hist_monthly], ignore_index=True)
+
+    if current_summary is not None and not current_summary.empty:
+        current_month = pd.Timestamp.today().to_period("M").to_timestamp()
+        latest = current_summary.copy()
+        latest["기준월"] = current_month
+        monthly_records = pd.concat([monthly_records, latest], ignore_index=True)
+
+    if monthly_records.empty:
+        return pd.DataFrame()
+
+    monthly_records = monthly_records.drop_duplicates(
+        subset=["기준월", "상위부서명", "부서명"], keep="last"
+    )
+
+    pivot = (
+        monthly_records.pivot_table(
+            index=["상위부서명", "부서명"],
+            columns="기준월",
+            values="등록인원",
+            aggfunc="last",
+            fill_value=0,
+        )
+        .reset_index()
+    )
+
+    def format_month(col):
+        return col.strftime("%Y년%m월") if isinstance(col, pd.Timestamp) else col
+
+    pivot.columns = [format_month(col) for col in pivot.columns]
+    pivot = pivot.sort_values(["상위부서명", "부서명"])
+
+    # 총합계 행 추가
+    value_cols = [c for c in pivot.columns if c not in ("상위부서명", "부서명")]
+    if value_cols:
+        totals = pivot[value_cols].sum()
+        total_row = {"상위부서명": "총합계", "부서명": ""}
+        total_row.update({col: totals[col] for col in value_cols})
+        pivot = pd.concat([pivot, pd.DataFrame([total_row])], ignore_index=True)
+
+    # 상위부서명 반복 표시는 공백으로 처리해 계층감을 살림
+    pivot["상위부서명"] = pivot["상위부서명"].fillna("")
+    pivot["부서명"] = pivot["부서명"].fillna("")
+    dup_mask = (pivot["상위부서명"] == pivot["상위부서명"].shift()) & (pivot["상위부서명"] != "총합계")
+    pivot.loc[dup_mask, "상위부서명"] = ""
+
+    return pivot
 
 def generate_summary_text(df: pd.DataFrame, agg_level: str, factory_name: str = "전체", raw_data: pd.DataFrame = None) -> str:
     """고급 AI 분석 엔진을 활용한 종합 분석 브리핑 생성"""
@@ -608,10 +976,35 @@ def plot_pareto_chart(df: pd.DataFrame, title: str, defect_qty_col: str = '유�
     fig.update_xaxes(title_text="<b>불량 유형</b>")
     st.plotly_chart(fig, use_container_width=True)
 
-def reset_filters(min_data_date, max_data_date):
-    """Callback function to reset date range to the full data range and agg_level to '월별'."""
+def get_year_boundaries(reference_date: Optional[date], min_data_date: date, max_data_date: date) -> Tuple[date, date]:
+    """주어진 참조일이 속한 연도의 시작/끝을 데이터 범위에 맞춰 반환합니다."""
+    target_date = reference_date or date.today()
+    year_start = date(target_date.year, 1, 1)
+    year_end = date(target_date.year, 12, 31)
+    start = max(min_data_date, year_start)
+    end = min(max_data_date, year_end)
+    if start > end:
+        start, end = min_data_date, max_data_date
+    return start, end
+
+
+def reset_filters(min_data_date, max_data_date, reference_date=None):
+    """집계 기준을 월별로 두고, 조회 연도를 기준으로 기간을 재설정합니다."""
+    start, end = get_year_boundaries(
+        reference_date or st.session_state.get('range_reference_date'),
+        min_data_date,
+        max_data_date,
+    )
+    st.session_state.date_range = (start, end)
+    st.session_state.agg_level = '월별'
+    st.session_state.range_reference_date = end
+
+
+def set_maximum_period(min_data_date, max_data_date):
+    """데이터의 전체 기간으로 조회 범위를 확장합니다."""
     st.session_state.date_range = (min_data_date, max_data_date)
     st.session_state.agg_level = '월별'
+    st.session_state.range_reference_date = max_data_date
 
 # --- 대시보드 UI 시작 ---
 st.title("👑 지능형 생산 대시보드 V105")
@@ -679,6 +1072,10 @@ if 'date_range' not in st.session_state or 'agg_level' not in st.session_state:
     if 'date_range' not in st.session_state: st.session_state.date_range = (min_date_global, max_date_global)
     if 'agg_level' not in st.session_state: st.session_state.agg_level = '월별'
 
+if 'range_reference_date' not in st.session_state:
+    default_reference = st.session_state.date_range[1] if 'date_range' in st.session_state else date.today()
+    st.session_state.range_reference_date = default_reference
+
 st.sidebar.header("로딩된 파일 정보"); st.sidebar.info(f"목표: {target_filename}" if target_filename else "파일 없음"); st.sidebar.info(f"수율: {yield_filename}" if yield_filename else "파일 없음"); st.sidebar.info(f"가동률: {util_filename}" if util_filename else "파일 없음"); st.sidebar.info(f"불량: {defect_filename}" if defect_filename else "파일 없음")
 
 tab_list = ["📊 일일 생산 현황 보고", "종합 분석", "목표 달성률", "수율 분석", "생산실적 상세조회", "가동률 분석", "불량유형별 분석"]
@@ -697,18 +1094,27 @@ def manage_tab_transitions():
         full_start_date, full_end_date = all_dates.min().date(), all_dates.max().date()
     else:
         full_start_date, full_end_date = date.today(), date.today()
-    
-    # 패턴 1: 프로그램 시작 또는 일일 보고서 탭에서 다른 탭으로 이동
+
+    reference_date_for_year = (
+        st.session_state.get('daily_reference_date')
+        or st.session_state.get('range_reference_date')
+        or full_end_date
+    )
+
+    # 패턴 1: 프로그램 시작 또는 일일 생산 현황 보고 탭에서 다른 탭으로 이동
     if (previous_tab is None or previous_tab == "📊 일일 생산 현황 보고") and current_tab != "📊 일일 생산 현황 보고":
-        # 저장된 설정이 있으면 복원, 없으면 기본값 설정
+        # 저장된 설정이 있으면 복원, 없으면 조회 연도 전체로 설정
         if 'saved_date_range' in st.session_state and 'saved_agg_level' in st.session_state:
             st.session_state.date_range = st.session_state.saved_date_range
             st.session_state.agg_level = st.session_state.saved_agg_level
+            if isinstance(st.session_state.saved_date_range, (list, tuple)) and len(st.session_state.saved_date_range) == 2:
+                st.session_state.range_reference_date = st.session_state.saved_date_range[1]
         else:
-            # 기본값: 전체기간, 월별
-            st.session_state.date_range = (full_start_date, full_end_date)
-            st.session_state.agg_level = '월별'
-    
+            reset_filters(full_start_date, full_end_date, reference_date_for_year)
+    elif previous_tab == "불량유형별 분석" and current_tab != "불량유형별 분석":
+        # 불량유형별 탭 이탈 시에도 동일한 리셋 규칙 적용 (조회 연도 전체, 월별)
+        reset_filters(full_start_date, full_end_date, reference_date_for_year)
+
     # 패턴 2: 다른 탭에서 일일 보고서 탭으로 이동 (현재 설정 저장)
     elif current_tab == "📊 일일 생산 현황 보고" and previous_tab != "📊 일일 생산 현황 보고" and previous_tab is not None:
         # 현재 설정을 저장 (나중에 복원용)
@@ -721,6 +1127,404 @@ def manage_tab_transitions():
 
 # 탭 전환 관리 실행
 manage_tab_transitions()
+
+def render_personnel_section() -> None:
+    if PERSONNEL_FEEDBACK_KEY in st.session_state:
+        st.success(st.session_state[PERSONNEL_FEEDBACK_KEY])
+        del st.session_state[PERSONNEL_FEEDBACK_KEY]
+
+    personnel_df = load_personnel_data()
+    for col in PERSONNEL_COLUMNS:
+        if col != "No." and col in personnel_df.columns:
+            personnel_df[col] = personnel_df[col].fillna("").astype(str).str.strip()
+
+    name_series = personnel_df["성명"].fillna("").astype(str).str.strip() if "성명" in personnel_df else pd.Series(dtype=str)
+    registered_mask = name_series.astype(bool)
+    registered_df = personnel_df[registered_mask].copy()
+    if not registered_df.empty:
+        registered_df.loc[:, "성명"] = name_series[registered_mask].values
+        for col in ["상위부서명", "부서명", "사번", "직위", "직책"]:
+            if col in registered_df.columns:
+                registered_df.loc[:, col] = registered_df[col].fillna("").astype(str).str.strip()
+
+    ensure_weekly_personnel_snapshot(registered_df)
+
+    history_df = load_personnel_history()
+    history_monthly = pd.DataFrame(columns=["월", "상위부서명", "부서명", "등록인원", "기준일"])
+    if not history_df.empty:
+        history_proc = history_df.copy()
+        history_proc["기준일"] = pd.to_datetime(history_proc["기준일"], errors="coerce")
+        history_proc = history_proc.dropna(subset=["기준일"])
+        if not history_proc.empty:
+            for col in ["상위부서명", "부서명"]:
+                if col in history_proc.columns:
+                    history_proc[col] = history_proc[col].fillna("").astype(str).str.strip()
+            history_proc["등록인원"] = pd.to_numeric(history_proc["등록인원"], errors="coerce").fillna(0).astype(int)
+            history_proc = history_proc.sort_values("기준일")
+            history_proc["월"] = history_proc["기준일"].dt.to_period("M").dt.to_timestamp()
+            history_monthly = history_proc.drop_duplicates(subset=["월", "상위부서명", "부서명"], keep="last")
+            history_monthly = history_monthly[["월", "상위부서명", "부서명", "등록인원", "기준일"]]
+
+    current_summary = pd.DataFrame(columns=["상위부서명", "부서명", "등록인원"])
+    if not registered_df.empty:
+        current_summary = (
+            registered_df.groupby(["상위부서명", "부서명"], dropna=False)
+            .size()
+            .reset_index(name="등록인원")
+        )
+        current_summary["상위부서명"] = current_summary["상위부서명"].fillna("").astype(str).str.strip()
+        current_summary["부서명"] = current_summary["부서명"].fillna("").astype(str).str.strip()
+
+    monthly_headcount_table = build_monthly_headcount_table(history_df, current_summary)
+
+    upper_options = sorted({str(name).strip() for name in personnel_df["상위부서명"].tolist() if str(name).strip()})
+    dept_options = sorted({str(name).strip() for name in personnel_df["부서명"].tolist() if str(name).strip()})
+    title_options = sorted({str(name).strip() for name in personnel_df["직위"].tolist() if str(name).strip()}) if "직위" in personnel_df else []
+    duty_options = sorted({str(name).strip() for name in personnel_df["직책"].tolist() if str(name).strip()}) if "직책" in personnel_df else []
+
+    st.markdown("#### 부서별 인원 현황 (월별)")
+
+    if monthly_headcount_table.empty:
+        st.info("등록된 인원 데이터 또는 이력이 없어 월별 인원표를 만들 수 없습니다. 파일을 업데이트하면 자동으로 반영됩니다.")
+    else:
+        st.dataframe(monthly_headcount_table, use_container_width=True, hide_index=True)
+        st.caption("상위부서명-부서명 기준 월별 인원 현황입니다. 최신 월은 현재 파일 기준으로 갱신됩니다.")
+
+    st.markdown("#### 현재 인원 현황")
+
+    if personnel_df.empty:
+        st.info("등록된 인원 정보가 없습니다.")
+        return
+
+    utility_cols = st.columns(2)
+    with utility_cols[0]:
+        summary_export = current_summary.copy()
+        export_bytes = None
+        export_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        export_name = "인원현황.xlsx"
+
+        for engine in ("xlsxwriter", "openpyxl"):
+            buffer = io.BytesIO()
+            try:
+                with pd.ExcelWriter(buffer, engine=engine) as writer:
+                    personnel_df.to_excel(writer, index=False, sheet_name="인원현황")
+                    if not summary_export.empty:
+                        summary_export.to_excel(writer, index=False, sheet_name="상위부서_부서별")
+                    if not monthly_headcount_table.empty:
+                        monthly_headcount_table.to_excel(writer, index=False, sheet_name="월별현황")
+                export_bytes = buffer.getvalue()
+                break
+            except Exception:
+                continue
+
+        if export_bytes is None:
+            export_bytes = personnel_df.to_csv(index=False).encode("utf-8-sig")
+            export_mime = "text/csv"
+            export_name = "인원현황.csv"
+
+        st.download_button(
+            label="인원현황 다운로드",
+            data=export_bytes,
+            file_name=export_name,
+            mime=export_mime
+        )
+    with utility_cols[1]:
+        st.metric("등록 인원 수", f"{len(registered_df)}명")
+        st.caption("성명이 입력된 인원만 집계합니다.")
+
+    st.markdown("##### 상위부서·부서별 현재 인원")
+    if current_summary.empty:
+        st.info("등록된 인원이 없어 현황을 표시할 수 없습니다. 성명을 입력하면 자동으로 반영됩니다.")
+    else:
+        current_display = current_summary.rename(columns={"등록인원": "현재 인원"}).sort_values(["상위부서명", "부서명"])
+        st.dataframe(current_display, use_container_width=True, hide_index=True)
+
+    st.markdown("##### 인원 이력 트렌드 (월별)")
+    if history_monthly.empty:
+        st.info("이력 데이터가 없습니다. 신규 데이터가 추가되면 최신 월 기준으로 자동 기록됩니다.")
+    else:
+        filters = st.columns(2)
+        with filters[0]:
+            upper_options_hist = sorted({team for team in history_monthly["상위부서명"].unique() if team})
+            upper_select = st.selectbox(
+                "상위부서 선택",
+                ["전체"] + upper_options_hist,
+                key="personnel_history_upper"
+            )
+
+        filtered_monthly = history_monthly.copy()
+        if upper_select != "전체":
+            filtered_monthly = filtered_monthly[filtered_monthly["상위부서명"] == upper_select]
+
+        with filters[1]:
+            dept_options_hist = sorted({proc for proc in history_monthly["부서명"].unique() if proc})
+            dept_select = st.selectbox(
+                "부서 선택",
+                ["전체"] + dept_options_hist,
+                key="personnel_history_dept"
+            )
+        if dept_select != "전체":
+            filtered_monthly = filtered_monthly[filtered_monthly["부서명"] == dept_select]
+
+        chart_placeholder = st.empty()
+        if filtered_monthly.empty:
+            chart_placeholder.info("선택한 조건에 해당하는 이력 데이터가 없습니다.")
+        else:
+            if upper_select == "전체":
+                chart_df = (
+                    filtered_monthly.groupby(["월", "상위부서명"], dropna=False)["등록인원"]
+                    .sum()
+                    .reset_index()
+                )
+                if chart_df.empty:
+                    chart_placeholder.info("표시할 데이터가 없습니다.")
+                else:
+                    chart_df = chart_df.sort_values("월")
+                    fig_trend = px.line(
+                        chart_df,
+                        x="월",
+                        y="등록인원",
+                        color="상위부서명",
+                        markers=True,
+                        title="상위부서별 월간 인원 추이"
+                    )
+                    fig_trend.update_layout(
+                        height=420,
+                        xaxis_title="월",
+                        yaxis_title="등록 인원(명)",
+                        legend_title="상위부서명"
+                    )
+                    chart_placeholder.plotly_chart(fig_trend, use_container_width=True)
+            else:
+                team_monthly = filtered_monthly.copy()
+                chart_df = (
+                    team_monthly.groupby(["월", "부서명"], dropna=False)["등록인원"]
+                    .sum()
+                    .reset_index()
+                )
+                chart_df = chart_df.sort_values("월")
+                fig_trend = px.line(
+                    chart_df,
+                    x="월",
+                    y="등록인원",
+                    color="부서명",
+                    markers=True,
+                    title=f"{upper_select} 부서별 월간 인원 추이"
+                )
+                fig_trend.update_layout(
+                    height=420,
+                    xaxis_title="월",
+                    yaxis_title="등록 인원(명)",
+                    legend_title="부서명"
+                )
+                chart_placeholder.plotly_chart(fig_trend, use_container_width=True)
+
+            latest_month = filtered_monthly["월"].max()
+            if pd.notna(latest_month):
+                latest_summary = (
+                    filtered_monthly[filtered_monthly["월"] == latest_month]
+                    .groupby(["상위부서명", "부서명"], dropna=False)["등록인원"]
+                    .sum()
+                    .reset_index()
+                    .sort_values(["상위부서명", "부서명"])
+                )
+                display_table = filtered_monthly.copy().sort_values(["월", "상위부서명", "부서명"])
+                display_table["월"] = display_table["월"].dt.strftime("%Y-%m")
+                latest_month_str = latest_month.strftime("%Y-%m")
+                st.caption(f"• 최신 기록 기준 ({latest_month_str}) 상위부서/부서별 등록 인원")
+                st.dataframe(latest_summary, use_container_width=True, hide_index=True)
+                with st.expander("월별 상세 내역", expanded=False):
+                    st.dataframe(
+                        display_table[["월", "상위부서명", "부서명", "등록인원"]],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+    upper_names = sorted({name for name in personnel_df["상위부서명"].tolist() if str(name).strip()})
+    if upper_names:
+        markdown_lines = "\n".join(f"- {team}" for team in upper_names)
+        st.markdown("**등록된 상위부서 목록**\n" + markdown_lines)
+
+    if registered_df.empty:
+        st.info("등록된 인원 정보가 없습니다. 아래 인원 등록 영역을 활용해 인원을 추가해 주세요.")
+        filtered_df = pd.DataFrame(columns=PERSONNEL_COLUMNS)
+        edited_df = None
+    else:
+        search_name = st.text_input("성명 검색", key="personnel_search_name", placeholder="찾을 성명을 입력하세요.")
+        filtered_df = registered_df.copy()
+        if search_name:
+            filtered_df = filtered_df[
+                filtered_df["성명"].str.contains(search_name, case=False, na=False)
+            ].copy()
+            if filtered_df.empty:
+                st.info(f"'{search_name}' 성명을 가진 인원을 찾지 못했습니다.")
+
+        if filtered_df.empty:
+            edited_df = None
+        else:
+            delete_view_df = filtered_df.copy()
+            delete_view_df.insert(0, "삭제", False)
+
+            edited_df = st.data_editor(
+                delete_view_df,
+                column_config={
+                    "삭제": st.column_config.CheckboxColumn(
+                        "삭제",
+                        help="삭제할 인원을 선택하세요.",
+                        default=False
+                    )
+                },
+                disabled=PERSONNEL_COLUMNS,
+                hide_index=True,
+                use_container_width=True,
+                key="personnel_delete_editor"
+            )
+
+    if st.button("선택 인원 삭제"):
+        if isinstance(edited_df, pd.DataFrame):
+            rows_to_delete = edited_df[edited_df["삭제"]]
+            if rows_to_delete.empty:
+                st.warning("삭제할 인원을 선택해 주세요.")
+            else:
+                delete_records = rows_to_delete[PERSONNEL_COLUMNS].apply(tuple, axis=1).tolist()
+                base_records = personnel_df[PERSONNEL_COLUMNS].apply(tuple, axis=1)
+                remaining_mask = ~base_records.isin(delete_records)
+                remaining_df = personnel_df[remaining_mask].reset_index(drop=True)
+                save_personnel_data(remaining_df)
+                st.session_state.pop("personnel_delete_editor", None)
+                st.session_state[PERSONNEL_FEEDBACK_KEY] = f"{len(rows_to_delete)}건의 인원 정보를 삭제했습니다."
+                st.experimental_rerun()
+        else:
+            st.error("표 데이터를 불러오지 못했습니다. 다시 시도해 주세요.")
+
+    with st.expander("인원 등록", expanded=True):
+        with st.form("personnel_entry_form"):
+            col1, col2 = st.columns(2)
+
+            upper_select_options = [PERSONNEL_NEW_OPTION_LABEL] + upper_options
+            upper_select = col1.selectbox(
+                "상위부서명",
+                upper_select_options,
+                key="personnel_upper_option"
+            )
+            upper_input = col1.text_input(
+                "상위부서명 입력",
+                key="personnel_upper_input",
+                disabled=upper_select != PERSONNEL_NEW_OPTION_LABEL,
+                placeholder="상위부서를 입력하세요."
+            )
+            upper_name = upper_input.strip() if upper_select == PERSONNEL_NEW_OPTION_LABEL else upper_select.strip()
+
+            if upper_select != PERSONNEL_NEW_OPTION_LABEL and upper_select:
+                dept_candidates = personnel_df[personnel_df["상위부서명"] == upper_select]
+            else:
+                dept_candidates = personnel_df
+            dept_seed = sorted({str(name).strip() for name in dept_candidates["부서명"].tolist() if str(name).strip()})
+
+            dept_select_options = [PERSONNEL_NEW_OPTION_LABEL] + dept_seed
+            dept_select = col2.selectbox(
+                "부서명",
+                dept_select_options,
+                key="personnel_dept_option"
+            )
+            dept_input = col2.text_input(
+                "부서명 입력",
+                key="personnel_dept_input",
+                disabled=dept_select != PERSONNEL_NEW_OPTION_LABEL,
+                placeholder="부서명을 입력하세요."
+            )
+            dept_name = dept_input.strip() if dept_select == PERSONNEL_NEW_OPTION_LABEL else dept_select.strip()
+
+            col3, col4 = st.columns(2)
+            emp_id = col3.text_input("사번", key="personnel_emp_id", placeholder="선택 입력")
+            name_value = col4.text_input("성명", key="personnel_name_input")
+
+            col5, col6 = st.columns(2)
+            title_select_options = [PERSONNEL_NEW_OPTION_LABEL] + title_options
+            title_select = col5.selectbox(
+                "직위",
+                title_select_options,
+                key="personnel_title_option"
+            )
+            title_input = col5.text_input(
+                "직위 입력",
+                key="personnel_title_input",
+                disabled=title_select != PERSONNEL_NEW_OPTION_LABEL,
+                placeholder="예: 사원, 대리"
+            )
+            title_value = title_input.strip() if title_select == PERSONNEL_NEW_OPTION_LABEL else title_select.strip()
+
+            duty_select_options = [PERSONNEL_NEW_OPTION_LABEL] + duty_options
+            duty_select = col6.selectbox(
+                "직책",
+                duty_select_options,
+                key="personnel_role_option"
+            )
+            duty_input = col6.text_input(
+                "직책 입력",
+                key="personnel_role_input",
+                disabled=duty_select != PERSONNEL_NEW_OPTION_LABEL,
+                placeholder="예: 팀장, 담당"
+            )
+            duty_value = duty_input.strip() if duty_select == PERSONNEL_NEW_OPTION_LABEL else duty_select.strip()
+
+            submitted = st.form_submit_button("저장", type="primary")
+
+            if submitted:
+                inputs = {
+                    "No.": pd.NA,
+                    "사번": emp_id.strip(),
+                    "상위부서명": upper_name,
+                    "부서명": dept_name,
+                    "성명": name_value.strip(),
+                    "직위": title_value,
+                    "직책": duty_value,
+                }
+
+                required = {"상위부서명": upper_name, "부서명": dept_name, "성명": name_value.strip()}
+                missing_fields = [label for label, value in required.items() if not value]
+                if missing_fields:
+                    st.warning("상위부서명, 부서명, 성명은 필수입니다.")
+                else:
+                    if inputs["사번"]:
+                        duplicate_mask = personnel_df["사번"] == inputs["사번"]
+                    else:
+                        duplicate_mask = (
+                            (personnel_df["상위부서명"] == inputs["상위부서명"]) &
+                            (personnel_df["부서명"] == inputs["부서명"]) &
+                            (personnel_df["성명"] == inputs["성명"])
+                        )
+
+                    if duplicate_mask.any():
+                        st.info("이미 동일한 인원 정보가 등록되어 있습니다.")
+                    else:
+                        personnel_df = pd.concat([personnel_df, pd.DataFrame([inputs])], ignore_index=True)
+                        save_personnel_data(personnel_df)
+                        st.session_state["personnel_upper_option"] = PERSONNEL_NEW_OPTION_LABEL
+                        st.session_state["personnel_dept_option"] = PERSONNEL_NEW_OPTION_LABEL
+                        st.session_state["personnel_title_option"] = PERSONNEL_NEW_OPTION_LABEL
+                        st.session_state["personnel_role_option"] = PERSONNEL_NEW_OPTION_LABEL
+                        st.session_state["personnel_upper_input"] = ""
+                        st.session_state["personnel_dept_input"] = ""
+                        st.session_state["personnel_title_input"] = ""
+                        st.session_state["personnel_role_input"] = ""
+                        st.session_state["personnel_emp_id"] = ""
+                        st.session_state["personnel_name_input"] = ""
+                        st.session_state.pop("personnel_delete_editor", None)
+                        st.session_state[PERSONNEL_FEEDBACK_KEY] = "인원 정보를 저장했습니다."
+                        st.experimental_rerun()
+
+def render_masterdata_tab() -> None:
+    st.markdown("## 기초 정보 관리")
+    st.caption("생산 관련 기초 데이터를 한 곳에서 관리합니다.")
+
+    master_tabs = st.tabs(["인원 관리", "기타 기초정보"])
+
+    with master_tabs[0]:
+        render_personnel_section()
+
+    with master_tabs[1]:
+        st.info("추가 기초 정보를 이 영역에 확장할 수 있습니다.")
 
 def dataframe_to_html_table(df, font_size=18, highlight_col=None):
     """DataFrame을 HTML 테이블로 변환하는 함수 (글꼴 크기 조절 가능)"""
@@ -860,6 +1664,256 @@ def create_download_section(df, tab_name, agg_level, start_date, end_date):
     with col3:
         st.info(f"**데이터 정보**\n- 기간: {start_date} ~ {end_date}\n- 집계: {agg_level}\n- 행 수: {len(df):,}개")
 
+def render_workforce_management_tab() -> None:
+    """생산기획팀 인력 운영 대시보드"""
+    st.header("인력 운영 센터", anchor=False)
+    st.caption("배치·근태·생산성·교육·수급·비용·이슈까지 한 화면에서 관리합니다. 엑셀을 통해 세부 데이터를 지속적으로 유지할 수 있습니다.")
+
+    workforce_data = load_workforce_data()
+    deployment_df = workforce_data.get("배치운영", pd.DataFrame())
+    attendance_df = workforce_data.get("근태관리", pd.DataFrame())
+    productivity_df = workforce_data.get("생산성", pd.DataFrame())
+    training_df = workforce_data.get("교육자격", pd.DataFrame())
+    supply_df = workforce_data.get("수급계획", pd.DataFrame())
+    cost_df = workforce_data.get("비용관리", pd.DataFrame())
+    issue_df = workforce_data.get("현장이슈", pd.DataFrame())
+
+    selected_display = st.multiselect(
+        "관리 대상 공장",
+        FACTORY_DISPLAY_CHOICES,
+        default=FACTORY_DISPLAY_CHOICES,
+        help="필요한 공장만 선택하면 모든 지표가 해당 공장 기준으로 필터링됩니다."
+    )
+    if selected_display:
+        selected_factories = [FACTORY_DISPLAY_TO_CODE[label] for label in selected_display]
+    else:
+        selected_factories = list(FACTORY_DEFINITIONS.keys())
+    st.caption("선택된 공장: " + ", ".join(FACTORY_DISPLAY_LABELS[code] for code in selected_factories))
+
+    def apply_factory_filter(df: pd.DataFrame) -> pd.DataFrame:
+        if df is None:
+            return pd.DataFrame()
+        df_copy = df.copy()
+        if df_copy.empty or "공장" not in df_copy.columns:
+            return df_copy
+        if len(selected_factories) == len(FACTORY_DEFINITIONS):
+            return df_copy
+        return df_copy[df_copy["공장"].isin(selected_factories)].copy()
+
+    deployment = apply_factory_filter(deployment_df)
+    attendance = apply_factory_filter(attendance_df)
+    productivity = apply_factory_filter(productivity_df)
+    training = apply_factory_filter(training_df)
+    supply = apply_factory_filter(supply_df)
+    cost = apply_factory_filter(cost_df)
+    issue = apply_factory_filter(issue_df)
+
+    control_cols = st.columns([2, 3])
+    with control_cols[0]:
+        st.download_button(
+            "관리용 엑셀 다운로드",
+            data=get_workforce_excel_bytes(),
+            file_name="workforce_master.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+    with control_cols[1]:
+        uploaded = st.file_uploader(
+            "갱신된 엑셀 업로드",
+            type=["xlsx"],
+            key="workforce_excel_uploader",
+            help="시트 구조를 유지한 상태로 데이터를 수정한 뒤 업로드하면 즉시 반영됩니다."
+        )
+        if uploaded is not None:
+            success, message = handle_workforce_upload(uploaded)
+            if success:
+                st.success(message)
+                st.experimental_rerun()
+            else:
+                st.error(message)
+
+    def _numeric(series: pd.Series) -> pd.Series:
+        return pd.to_numeric(series, errors="coerce").fillna(0)
+
+    required_sum = _numeric(deployment["필요인원"]).sum() if "필요인원" in deployment.columns else 0
+    assigned_sum = _numeric(deployment["배치인원"]).sum() if "배치인원" in deployment.columns else 0
+    gap = assigned_sum - required_sum
+    tardy = _numeric(attendance["지각"]).sum() if "지각" in attendance.columns else 0
+    absence = _numeric(attendance["결근"]).sum() if "결근" in attendance.columns else 0
+    avg_eff = _numeric(productivity["효율(%)"]).mean() if "효율(%)" in productivity.columns and not productivity.empty else 0
+    total_cost = _numeric(cost["총인건비"]).sum() if "총인건비" in cost.columns else 0
+    issue_count = len(issue.index)
+
+    kpi_cols = st.columns(4)
+    with kpi_cols[0]:
+        st.metric("현재 배치 인원", f"{assigned_sum:,.0f}명", delta=f"{gap:+.0f}명 vs 필요")
+    with kpi_cols[1]:
+        st.metric("근태 이슈", f"{(tardy + absence):.0f}건", delta=f"지각 {tardy:.0f} · 결근 {absence:.0f}")
+    with kpi_cols[2]:
+        st.metric("평균 효율", f"{avg_eff:,.1f}%", delta=f"{avg_eff - 95:+.1f}p (목표 95%)")
+    with kpi_cols[3]:
+        st.metric("누적 인건비(만원)", f"{total_cost:,.0f}", delta=f"현장 이슈 {issue_count}건")
+
+    st.markdown("### 1. 인력 배치 · 운영")
+    if deployment.empty:
+        st.info("배치운영 데이터가 없습니다. 엑셀 파일을 업데이트해 주세요.")
+    else:
+        deploy = deployment.copy()
+        for col in ["필요인원", "배치인원", "신규투입"]:
+            if col in deploy.columns:
+                deploy[col] = _numeric(deploy[col])
+        deploy["증감"] = deploy.get("배치인원", 0) - deploy.get("필요인원", 0)
+        plot_df = deploy.copy()
+        x_field = "공정"
+        if "공장" in plot_df.columns:
+            plot_df["공정(공장)"] = plot_df["공정"].astype(str) + " (" + plot_df["공장"].astype(str) + ")"
+            x_field = "공정(공장)"
+        id_cols = [x_field, "근무조"]
+        if "공장" in plot_df.columns:
+            id_cols.append("공장")
+        melt_df = plot_df.melt(
+            id_vars=id_cols,
+            value_vars=[col for col in ["필요인원", "배치인원"] if col in plot_df.columns],
+            var_name="구분",
+            value_name="인원"
+        )
+        if not melt_df.empty:
+            fig = px.bar(
+                melt_df,
+                x=x_field,
+                y="인원",
+                color="구분",
+                barmode="group",
+                hover_data=["근무조"] + (["공장"] if "공장" in plot_df.columns else []),
+                text_auto=True
+            )
+            fig.update_layout(height=380, legend_title="구분", yaxis_title="인원(명)")
+            st.plotly_chart(fig, use_container_width=True)
+        if "공장" in deploy.columns:
+            factory_summary = deploy.groupby("공장")[['필요인원', '배치인원']].sum().reset_index()
+            factory_melt = factory_summary.melt(id_vars=["공장"], value_vars=["필요인원", "배치인원"], var_name="구분", value_name="인원")
+            fig_factory = px.bar(factory_melt, x="공장", y="인원", color="구분", barmode="group", text_auto=True, title="공장별 총배치 현황")
+            fig_factory.update_layout(height=300, yaxis_title="인원(명)")
+            st.plotly_chart(fig_factory, use_container_width=True)
+        display_columns = []
+        if "공장" in deploy.columns:
+            display_columns.append("공장")
+        display_columns += [col for col in ["공정", "필요인원", "배치인원", "증감", "근무조", "신규투입", "이동계획"] if col in deploy.columns]
+        st.dataframe(deploy[display_columns], use_container_width=True, hide_index=True)
+
+    st.markdown("### 2. 근태 모니터링")
+    if attendance.empty:
+        st.info("근태 데이터가 없습니다.")
+    else:
+        attendance["날짜"] = pd.to_datetime(attendance["날짜"], errors="coerce")
+        metric_cols = [col for col in ["지각", "결근", "휴가", "특근"] if col in attendance.columns]
+        for col in metric_cols:
+            attendance[col] = _numeric(attendance[col])
+        att_daily = attendance.groupby("날짜")[metric_cols].sum().reset_index()
+        if not att_daily.empty:
+            melted_att = att_daily.melt(id_vars=["날짜"], value_vars=metric_cols, var_name="구분", value_name="건수")
+            fig_att = px.area(melted_att, x="날짜", y="건수", color="구분", title="일자별 근태 추세")
+            fig_att.update_layout(height=320)
+            st.plotly_chart(fig_att, use_container_width=True)
+        if "공장" in attendance.columns and metric_cols:
+            att_factory = attendance.groupby("공장")[metric_cols].sum().reset_index()
+            st.dataframe(att_factory, use_container_width=True, hide_index=True)
+        latest = attendance.sort_values("날짜", ascending=False)
+        st.dataframe(latest, use_container_width=True, hide_index=True)
+
+    st.markdown("### 3. 생산성 · 효율")
+    if productivity.empty:
+        st.info("생산성 데이터가 없습니다.")
+    else:
+        prod = productivity.copy()
+        prod_cols = ["UPH", "UPPH", "평균작업시간(분)", "효율(%)", "잔업시간", "특근생산성"]
+        for col in prod_cols:
+            if col in prod.columns:
+                prod[col] = _numeric(prod[col])
+        melt_prod = prod.melt(id_vars=["공정"], value_vars=["UPH", "UPPH"], var_name="지표", value_name="값")
+        fig_uph = px.bar(melt_prod, x="공정", y="값", color="지표", text_auto=True, title="공정별 인당 생산량")
+        fig_uph.update_layout(height=360, yaxis_title="단위/시간")
+        st.plotly_chart(fig_uph, use_container_width=True)
+        if "효율(%)" in prod.columns:
+            fig_eff = px.line(prod, x="공정", y="효율(%)", markers=True, title="공정별 효율")
+            fig_eff.update_yaxes(range=[0, max(110, prod["효율(%)"].max() + 5)])
+            st.plotly_chart(fig_eff, use_container_width=True)
+        st.dataframe(prod, use_container_width=True, hide_index=True)
+
+    st.markdown("### 4. 교육 · 자격 만료 현황")
+    if training.empty:
+        st.info("교육/자격 데이터가 없습니다.")
+    else:
+        training["만료일"] = pd.to_datetime(training["만료일"], errors="coerce")
+        training["수료일"] = pd.to_datetime(training["수료일"], errors="coerce")
+        upcoming_limit = pd.Timestamp.today() + pd.Timedelta(days=45)
+        upcoming = training[training["만료일"] <= upcoming_limit].sort_values("만료일")
+        if upcoming.empty:
+            st.success("45일 내 만료 예정인 교육이 없습니다.")
+        else:
+            st.warning("만료 예정 인원 확인이 필요합니다.")
+            st.dataframe(upcoming, use_container_width=True, hide_index=True)
+        with st.expander("전체 교육 이력 보기", expanded=False):
+            st.dataframe(training.sort_values("만료일"), use_container_width=True, hide_index=True)
+
+    st.markdown("### 5. 인력 수급 계획")
+    if supply.empty:
+        st.info("수급 계획 데이터가 없습니다.")
+    else:
+        supply["월"] = pd.to_datetime(supply["월"], errors="coerce")
+        for col in ["예상수요", "가용인원"]:
+            if col in supply.columns:
+                supply[col] = _numeric(supply[col])
+        supply["과부족"] = supply["가용인원"] - supply["예상수요"]
+        monthly_totals = supply.groupby("월")[['예상수요', '가용인원']].sum().reset_index()
+        line_fig = px.line(monthly_totals.sort_values("월"), x="월", y=["예상수요", "가용인원"], markers=True, title="월별 인력 수요 vs 가용 인원")
+        line_fig.update_layout(height=360, yaxis_title="인원(명)")
+        st.plotly_chart(line_fig, use_container_width=True)
+        if "공장" in supply.columns:
+            shortage_chart = px.bar(supply.sort_values("월"), x="월", y="과부족", color="공장", text_auto=True, title="공장별 과부족 인원 추이")
+        else:
+            shortage_chart = px.bar(supply.sort_values("월"), x="월", y="과부족", text_auto=True, title="과부족 인원 추이")
+        shortage_chart.update_layout(height=260, yaxis_title="가용 - 수요")
+        st.plotly_chart(shortage_chart, use_container_width=True)
+        st.dataframe(supply, use_container_width=True, hide_index=True)
+
+    st.markdown("### 6. 비용 구조")
+    if cost.empty:
+        st.info("비용관리 데이터가 없습니다.")
+    else:
+        for col in ["기본급합계", "잔업비", "특근비", "총인건비"]:
+            if col in cost.columns:
+                cost[col] = _numeric(cost[col])
+        if "총인건비" not in cost.columns or cost["총인건비"].isna().all():
+            cost["총인건비"] = cost.get("기본급합계", 0) + cost.get("잔업비", 0) + cost.get("특근비", 0)
+        bar_fig = px.bar(cost, x="공장", y="총인건비", color="부서", text_auto=True, barmode="group", title="공장/부서별 인건비")
+        bar_fig.update_layout(height=360, yaxis_title="인건비(만원)")
+        st.plotly_chart(bar_fig, use_container_width=True)
+        st.dataframe(cost, use_container_width=True, hide_index=True)
+
+    st.markdown("### 7. 현장 이슈 모니터링")
+    if issue.empty:
+        st.info("등록된 현장 이슈가 없습니다.")
+    else:
+        issue["날짜"] = pd.to_datetime(issue["날짜"], errors="coerce")
+        issue = issue.sort_values("날짜", ascending=False)
+        st.dataframe(issue, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    with st.expander("데이터 편집 및 엑셀 반영", expanded=False):
+        sheet_options = list(WORKFORCE_SHEET_COLUMNS.keys())
+        selected_sheet = st.selectbox("편집할 시트 선택", sheet_options, key="workforce_sheet_select")
+        editable_df = workforce_data.get(selected_sheet, pd.DataFrame(columns=WORKFORCE_SHEET_COLUMNS[selected_sheet]))
+        st.caption("필요 시 행을 추가하거나 삭제하고, 저장 버튼을 누르면 엑셀 파일로 즉시 반영됩니다.")
+        editor_key = f"workforce_editor_{selected_sheet}"
+        edited_df = st.data_editor(editable_df, num_rows="dynamic", use_container_width=True, key=editor_key)
+        if st.button("변경 사항 저장", type="primary", key=f"workforce_save_{selected_sheet}"):
+            workforce_data[selected_sheet] = edited_df
+            save_workforce_data(workforce_data)
+            st.success("엑셀 파일에 반영했습니다.")
+            st.experimental_rerun()
+
+
 def create_shared_filter_controls(df_for_current_tab):
     """
     모든 탭에서 공유되는 필터 컨트롤을 생성하고 필터링된 데이터프레임을 반환합니다.
@@ -881,13 +1935,26 @@ def create_shared_filter_controls(df_for_current_tab):
         if "분석" not in selected_tab: header_title = f"{selected_tab} 분석"
         st.header(header_title, anchor=False)
 
-    filter_cols = st.columns([6, 1, 3.5])
+    filter_cols = st.columns([5.4, 1.1, 1.1, 3.4])
     with filter_cols[0]:
         st.date_input("조회할 기간을 선택하세요", min_value=min_date_global, max_value=max_date_global, key='date_range')
     with filter_cols[1]:
         st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
-        st.button("기간 초기화", on_click=reset_filters, args=(min_date_global, max_date_global), help="조회 기간을 데이터의 전체 기간으로, 집계 기준을 '월별'로 초기화합니다.")
+        st.button(
+            "기간 초기화",
+            on_click=reset_filters,
+            args=(min_date_global, max_date_global),
+            help="현재 조회 기준일이 속한 연도의 모든 데이터를 기준으로 월별 집계합니다."
+        )
     with filter_cols[2]:
+        st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
+        st.button(
+            "최대 기간",
+            on_click=set_maximum_period,
+            args=(min_date_global, max_date_global),
+            help="데이터가 존재하는 전체 기간으로 조회 범위를 확장하고 월별로 집계합니다."
+        )
+    with filter_cols[3]:
         st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
         st.radio("집계 기준", options=['일별', '주간별', '월별', '분기별', '반기별', '년도별'], key='agg_level', horizontal=True)
 
@@ -898,10 +1965,11 @@ def create_shared_filter_controls(df_for_current_tab):
         start_date, end_date = date_range_value
     else:
         start_date, end_date = min_date_global, max_date_global
-    
+
     final_start_date = max(start_date, min_date_global)
     final_end_date = min(end_date, max_date_global)
-    
+    st.session_state.range_reference_date = final_end_date
+
     with header_cols[1]:
         st.markdown(f"<p style='text-align: right; margin-top: 1.2rem; font-size: 1.1rem; color: grey;'>({final_start_date.strftime('%Y-%m-%d')} ~ {final_end_date.strftime('%Y-%m-%d')})</p>", unsafe_allow_html=True)
     
@@ -1011,7 +2079,19 @@ if selected_tab == "📊 일일 생산 현황 보고":
         # 수율 데이터 필터링 (전용 데이터 사용)
         mask_yield_current = (daily_report_yield_data['date'].dt.date >= month_start) & (daily_report_yield_data['date'].dt.date < next_month_start)
         df_yield_current = daily_report_yield_data[mask_yield_current].copy()
-        
+
+        reference_date_for_range = month_start
+        if not df_yield_current.empty:
+            latest_record = df_yield_current['date'].max()
+            if pd.notnull(latest_record):
+                reference_date_for_range = latest_record.date()
+        elif not df_target_current.empty:
+            latest_record = df_target_current['date'].max()
+            if pd.notnull(latest_record):
+                reference_date_for_range = latest_record.date()
+        st.session_state.range_reference_date = reference_date_for_range
+        st.session_state.daily_reference_date = reference_date_for_range
+
         if not df_target_current.empty and not df_yield_current.empty:
             # 목표달성률 탭과 동일한 데이터 처리 방식 적용
             key_cols = ['date', '공장', '공정코드']
@@ -1165,36 +2245,75 @@ if selected_tab == "📊 일일 생산 현황 보고":
                     '총_양품수량': 'sum', 
                     'date': 'nunique'  # 작업일수
                 }).reset_index()
+
+                current_year = date.today().year
+                monthly_summary = monthly_summary[monthly_summary['년월'].dt.year == current_year]
+                
+                excluded_days_df = load_excluded_workdays()
+                if not excluded_days_df.empty:
+                    excluded_days_df = excluded_days_df.copy()
+                    excluded_days_df['년월'] = pd.PeriodIndex(year=excluded_days_df['년'], month=excluded_days_df['월'], freq='M')
+                    monthly_summary = monthly_summary.merge(
+                        excluded_days_df[['년월', '제외근무일수']],
+                        on='년월',
+                        how='left'
+                    )
+                else:
+                    monthly_summary['제외근무일수'] = 0
+                monthly_summary['제외근무일수'] = monthly_summary['제외근무일수'].fillna(0).astype(int)
+                calendar_days = monthly_summary['년월'].dt.to_timestamp().dt.daysinmonth
+                monthly_summary['계획작업일수'] = np.maximum(calendar_days - monthly_summary['제외근무일수'], 0)
                 
                 monthly_summary.rename(columns={
                     '목표_총_생산량': '목표수량',
                     '총_양품수량': '총_생산수량',  # 양품수량을 생산실적으로 표시
-                    'date': '작업일수'
+                    'date': '데이터일수'
                 }, inplace=True)
                 
-                # 월별 전체 목표량으로 재계산 (테이블 표시용)
-                for idx, row in monthly_summary.iterrows():
-                    try:
-                        year_month = str(row['년월'])
-                        if '-' in year_month:
-                            year, month = map(int, year_month.split('-'))
-                        elif '.' in year_month:
-                            year, month = map(int, year_month.split('.'))
-                        else:
-                            continue
-                        
-                        days_in_month = calendar.monthrange(year, month)[1]
-                        actual_working_days = row['작업일수']
-                        daily_avg_target = row['목표수량'] / actual_working_days if actual_working_days > 0 else 0
-                        monthly_summary.at[idx, '목표수량'] = daily_avg_target * days_in_month
-                    except:
-                        continue
+                # 생산이 있는 일자만 집계하여 작업일수 재계산
+                daily_productivity = (
+                    df_monthly_kpi.groupby(['년월', 'date'])
+                    .agg({
+                        '목표_총_생산량': 'sum',
+                        '총_생산수량': 'sum',
+                        '총_양품수량': 'sum'
+                    })
+                    .reset_index()
+                )
+                daily_productivity[['총_생산수량', '총_양품수량']] = daily_productivity[['총_생산수량', '총_양품수량']].fillna(0)
+                daily_productivity['has_production'] = daily_productivity[['총_생산수량', '총_양품수량']].max(axis=1) > 0
+                
+                productive_days = (
+                    daily_productivity.loc[daily_productivity['has_production']]
+                    .groupby('년월')['date']
+                    .nunique()
+                    .rename('작업일수')
+                )
+                
+                monthly_summary = monthly_summary.merge(productive_days, on='년월', how='left')
+                monthly_summary['데이터일수'] = monthly_summary['데이터일수'].fillna(0)
+                monthly_summary['작업일수'] = monthly_summary['작업일수'].fillna(0)
+                monthly_summary['작업일수'] = np.minimum(monthly_summary['작업일수'], monthly_summary['계획작업일수'])
+                
+                valid_mask = (monthly_summary['작업일수'] > 0) & (monthly_summary['데이터일수'] > 0)
+                monthly_summary['목표수량'] = np.where(
+                    valid_mask,
+                    (monthly_summary['목표수량'] / monthly_summary['데이터일수']) * monthly_summary['작업일수'],
+                    0
+                )
+                
+                monthly_summary['데이터일수'] = monthly_summary['데이터일수'].astype(int)
+                monthly_summary['작업일수'] = monthly_summary['작업일수'].astype(int)
                 
                 # 계산 컬럼 추가
                 monthly_summary['차이'] = monthly_summary['총_생산수량'] - monthly_summary['목표수량']
-                monthly_summary['달성율'] = (monthly_summary['총_생산수량'] / monthly_summary['목표수량'] * 100).round(1)
-                monthly_summary['미달율'] = (100 - monthly_summary['달성율']).round(1)
-                
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    monthly_achievement_rate = np.where(
+                        monthly_summary['목표수량'] > 0,
+                        (monthly_summary['총_생산수량'] / monthly_summary['목표수량']) * 100,
+                        0
+                    )
+                monthly_summary['달성율'] = np.round(monthly_achievement_rate, 1)
                 # 표시용 데이터 준비
                 display_data = monthly_summary.copy()
                 display_data['구분'] = display_data['년월'].astype(str)
@@ -1206,8 +2325,8 @@ if selected_tab == "📊 일일 생산 현황 보고":
                     '총_생산수량': '생산실적',
                     '차이': '차이',
                     '달성율': '달성율(%)',
-                    '미달율': '미달율(%)',
-                    '작업일수': '작업일수'
+                    '작업일수': '작업일수',
+                    '제외근무일수': '휴일수'
                 }
                 
                 display_summary = display_data[list(display_cols.keys())].rename(columns=display_cols)
@@ -1216,15 +2335,15 @@ if selected_tab == "📊 일일 생산 현황 보고":
                 for col in ['생산목표', '생산실적', '차이']:
                     display_summary[col] = display_summary[col].apply(lambda x: f"{x:,.0f}" if pd.notnull(x) else "0")
                 
-                for col in ['달성율(%)', '미달율(%)']:
+                for col in ['달성율(%)']:
                     display_summary[col] = display_summary[col].apply(lambda x: f"{x:.1f}%" if pd.notnull(x) else "0.0%")
                 
                 display_summary['작업일수'] = display_summary['작업일수'].apply(lambda x: f"{x:.0f}일" if pd.notnull(x) else "0일")
+                display_summary['휴일수'] = display_summary['휴일수'].apply(lambda x: f"{x:.0f}일" if pd.notnull(x) else "0일")
                 
                 # 합계 행 추가
                 if len(display_summary) > 1:
                     total_achievement = (monthly_summary['총_생산수량'].sum() / monthly_summary['목표수량'].sum() * 100) if monthly_summary['목표수량'].sum() > 0 else 0
-                    total_shortfall = 100 - total_achievement
                     
                     total_row = pd.DataFrame([{
                         '구분': '전체 합계',
@@ -1232,8 +2351,8 @@ if selected_tab == "📊 일일 생산 현황 보고":
                         '생산실적': f"{monthly_summary['총_생산수량'].sum():,.0f}",
                         '차이': f"{monthly_summary['차이'].sum():,.0f}",
                         '달성율(%)': f"{total_achievement:.1f}%",
-                        '미달율(%)': f"{total_shortfall:.1f}%",
-                        '작업일수': f"{monthly_summary['작업일수'].sum():.0f}일"
+                        '작업일수': f"{monthly_summary['작업일수'].sum():.0f}일",
+                        '휴일수': f"{monthly_summary['제외근무일수'].sum():.0f}일"
                     }])
                     
                     display_with_total = pd.concat([display_summary, total_row], ignore_index=True)
@@ -1509,7 +2628,7 @@ if selected_tab == "📊 일일 생산 현황 보고":
                     # 월별 요약 데이터가 있는 경우
                     if 'monthly_summary' in locals() and not monthly_summary.empty:
                         # 테이블 헤더
-                        headers = ['구분', '생산목표', '생산실적', '차이', '달성율', '미달율', '작업일수']
+                        headers = ['구분', '생산목표', '생산실적', '차이', '달성율', '작업일수', '휴일수']
                         
                         for i, header in enumerate(headers):
                             cell = ws.cell(row, i + 1, header)
@@ -1528,8 +2647,8 @@ if selected_tab == "📊 일일 생산 현황 보고":
                                 f"{int(data_row['총_생산수량']):,}",
                                 f"{int(data_row['차이']):,}",
                                 f"{data_row['달성율']:.1f}%",
-                                f"{data_row['미달율']:.1f}%",
-                                f"{int(data_row['작업일수'])}일"
+                                f"{int(data_row['작업일수'])}일",
+                                f"{int(data_row['제외근무일수'])}일"
                             ]
                             
                             for i, cell_value in enumerate(cells_data):
@@ -1553,7 +2672,6 @@ if selected_tab == "📊 일일 생산 현황 보고":
                         
                         # 전체 합계 행 추가
                         excel_total_achievement = (monthly_summary['총_생산수량'].sum() / monthly_summary['목표수량'].sum() * 100) if monthly_summary['목표수량'].sum() > 0 else 0
-                        excel_total_shortfall = 100 - excel_total_achievement
                         
                         total_data = [
                             "전체 합계",
@@ -1561,8 +2679,8 @@ if selected_tab == "📊 일일 생산 현황 보고":
                             f"{monthly_summary['총_생산수량'].sum():,.0f}",
                             f"{monthly_summary['차이'].sum():,.0f}",
                             f"{excel_total_achievement:.1f}%",
-                            f"{excel_total_shortfall:.1f}%",
-                            f"{monthly_summary['작업일수'].sum():.0f}일"
+                            f"{monthly_summary['작업일수'].sum():.0f}일",
+                            f"{monthly_summary['제외근무일수'].sum():.0f}일"
                         ]
                         
                         for i, cell_value in enumerate(total_data):
@@ -1673,32 +2791,62 @@ elif selected_tab == "목표 달성률":
                         with chart_setting_cols[3]:
                             trend_chart_height = st.slider("차트 높이", min_value=400, max_value=1000, value=600, step=50, key="trend_chart_height")
                     
-                    df_resampled = get_resampled_data(df_merged, agg_level, ['목표_총_생산량', '총_양품수량']); df_trend = df_resampled[df_resampled['공정코드'] == '[80] 누수/규격검사'].copy()
+                    display_mode_target_trend = st.radio(
+                        "표시 방식",
+                        options=["공장별로 구분하여 표시", "전체 공장 합산하여 표시"],
+                        index=0,
+                        horizontal=True,
+                        key="target_trend_display_mode",
+                        help="공장별 구분: 공장별 달성률 라인을 각각 표시 / 전체 공장 합산: 모든 공장의 목표와 양품 실적을 합산한 달성률을 1개 라인으로 표시합니다."
+                    )
+
+                    df_resampled = get_resampled_data(df_merged, agg_level, ['목표_총_생산량', '총_양품수량'])
+                    df_trend = df_resampled[df_resampled['공정코드'] == '[80] 누수/규격검사'].copy()
                     if not df_trend.empty:
-                        with pd.option_context('mode.use_inf_as_na', True): df_trend['달성률(%)'] = (100 * df_trend['총_양품수량'] / df_trend['목표_총_생산량']).fillna(0)
-                        
-                        # 라벨 겹침 방지 로직
-                        df_trend = df_trend.sort_values(['period', '달성률(%)'], ascending=[True, False])
-                        positions = ['top center', 'bottom center', 'middle right', 'middle left', 'top right', 'bottom right']
-                        df_trend['text_position'] = df_trend.groupby('period').cumcount().apply(lambda i: positions[i % len(positions)])
-                        
+                        period_order = sorted(df_trend['period'].unique())
                         fig_trend = go.Figure()
 
-                        for factory_name in sorted(df_trend['공장'].unique()):
-                            df_factory = df_trend[df_trend['공장'] == factory_name].sort_values('period')
-                            factory_color = next((color for key, color in FACTORY_COLOR_MAP.items() if key in factory_name), '#888888')
+                        if display_mode_target_trend == "전체 공장 합산하여 표시":
+                            overall_trend_data = df_trend.groupby('period').agg({
+                                '목표_총_생산량': 'sum',
+                                '총_양품수량': 'sum'
+                            }).reset_index()
+                            with pd.option_context('mode.use_inf_as_na', True):
+                                overall_trend_data['달성률(%)'] = (100 * overall_trend_data['총_양품수량'] / overall_trend_data['목표_총_생산량']).fillna(0)
+                            overall_trend_data = overall_trend_data.sort_values('period')
 
                             fig_trend.add_trace(go.Scatter(
-                                x=df_factory['period'], y=df_factory['달성률(%)'], name=f'{factory_name} 달성률',
-                                mode='lines+markers+text', text=df_factory['달성률(%)'], texttemplate='%{text:.2f}%',
-                                textposition=df_factory['text_position'], 
-                                line=dict(color=factory_color), legendgroup=factory_name,
+                                x=overall_trend_data['period'], y=overall_trend_data['달성률(%)'], name='전체 달성률',
+                                mode='lines+markers+text', text=overall_trend_data['달성률(%)'], texttemplate='%{text:.2f}%',
+                                textposition='top center',
+                                line=dict(color='black', width=3),
+                                marker=dict(color='black'),
                                 textfont=dict(size=trend_label_size, color='black')
                             ))
+                        else:
+                            with pd.option_context('mode.use_inf_as_na', True):
+                                df_trend['달성률(%)'] = (100 * df_trend['총_양품수량'] / df_trend['목표_총_생산량']).fillna(0)
+
+                            # 라벨 겹침 방지 로직
+                            df_trend = df_trend.sort_values(['period', '달성률(%)'], ascending=[True, False])
+                            positions = ['top center', 'bottom center', 'middle right', 'middle left', 'top right', 'bottom right']
+                            df_trend['text_position'] = df_trend.groupby('period').cumcount().apply(lambda i: positions[i % len(positions)])
+
+                            for factory_name in sorted(df_trend['공장'].unique()):
+                                df_factory = df_trend[df_trend['공장'] == factory_name].sort_values('period')
+                                factory_color = next((color for key, color in FACTORY_COLOR_MAP.items() if key in factory_name), '#888888')
+
+                                fig_trend.add_trace(go.Scatter(
+                                    x=df_factory['period'], y=df_factory['달성률(%)'], name=f'{factory_name} 달성률',
+                                    mode='lines+markers+text', text=df_factory['달성률(%)'], texttemplate='%{text:.2f}%',
+                                    textposition=df_factory['text_position'],
+                                    line=dict(color=factory_color), legendgroup=factory_name,
+                                    textfont=dict(size=trend_label_size, color='black')
+                                ))
 
                         fig_trend.update_layout(height=trend_chart_height, title_text=f'<b>{agg_level} 완제품 달성률 추이 (양품 기준)</b>', margin=dict(t=120), legend=dict(orientation="h", yanchor="bottom", y=1.10, xanchor="right", x=1))
                         fig_trend.update_yaxes(title_text="<b>달성률 (%)</b>", autorange=True, title_font_size=trend_axis_title_size, tickfont_size=trend_axis_tick_size) # Y축 범위 자동 조정
-                        fig_trend.update_xaxes(type='category', categoryorder='array', categoryarray=sorted(df_trend['period'].unique()), title_text=f"<b>{agg_level.replace('별','')}</b>", title_font_size=trend_axis_title_size, tickfont_size=trend_axis_tick_size)
+                        fig_trend.update_xaxes(type='category', categoryorder='array', categoryarray=period_order, title_text=f"<b>{agg_level.replace('별','')}</b>", title_font_size=trend_axis_title_size, tickfont_size=trend_axis_tick_size)
                         
                         # 자동 라벨 겹침 방지 기능 활성화
                         fig_trend.update_traces(textfont_size=trend_label_size, textposition='top center')
@@ -1966,6 +3114,13 @@ elif selected_tab == "목표 달성률":
                             with col_set4:
                                 trend_analysis_chart_height = st.slider("차트 높이", min_value=400, max_value=1000, value=600, step=50, key="trend_analysis_chart_height")
 
+                        show_overall_with_factories = st.checkbox(
+                            "공장별 추세 그래프에 전체(공장 합산) 함께보기",
+                            value=False,
+                            key="trend_analysis_show_overall_with_factories",
+                            help="공장별 달성률 라인과 함께 전체 달성률 라인을 추가로 표시합니다."
+                        )
+
                         fig_trend = px.line(overall_trend.sort_values('period'), 
                                           x='period', y='전체달성률(%)', 
                                           title='<b>전체 목표달성률 추세</b>',
@@ -1989,6 +3144,18 @@ elif selected_tab == "목표 달성률":
                                                   x='period', y='달성률(%)', color='공장',
                                                   title='<b>공장별 목표달성률 추세 비교</b>',
                                                   markers=True, text='달성률(%)', height=trend_analysis_chart_height)
+                        if show_overall_with_factories:
+                            overall_sorted = overall_trend.sort_values('period')
+                            fig_factory_trend.add_trace(go.Scatter(
+                                x=overall_sorted['period'],
+                                y=overall_sorted['전체달성률(%)'],
+                                name='전체',
+                                mode='lines+markers+text',
+                                text=overall_sorted['전체달성률(%)'],
+                                line=dict(color='black', width=3),
+                                marker=dict(color='black'),
+                            ))
+
                         fig_factory_trend.update_traces(texttemplate='%{text:.1f}%', textposition='top center', textfont=dict(size=trend_analysis_label_size, color='black'))
                         fig_factory_trend.update_xaxes(type='category', title_font_size=trend_analysis_axis_title_size, tickfont_size=trend_analysis_axis_tick_size)
                         fig_factory_trend.update_yaxes(title_font_size=trend_analysis_axis_title_size, tickfont_size=trend_analysis_axis_tick_size)
