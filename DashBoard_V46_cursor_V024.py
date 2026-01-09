@@ -159,6 +159,93 @@ def load_all_data() -> Dict[str, Tuple[pd.DataFrame, Optional[str]]]:
             data_frames[key] = (pd.DataFrame(), None)
     return data_frames
 
+# --- 생산실적현황 데이터 로딩 (설비 가동현황용) ---
+@st.cache_data
+def load_production_data() -> Tuple[pd.DataFrame, Optional[str]]:
+    """생산실적현황 파일 로딩 (수율/가동률/목표달성율 제외)"""
+    def read_data_file(file_path: str) -> pd.DataFrame:
+        file_ext = os.path.splitext(file_path)[1].lower()
+        if file_ext == '.csv':
+            df = pd.read_csv(file_path, encoding='utf-8-sig', thousands=',', skip_blank_lines=True)
+            df = df.loc[:, ~df.columns.str.contains('^Unnamed', na=False)]
+            df = df.dropna(axis=1, how='all')
+            df.columns = df.columns.str.strip()
+        else:
+            try:
+                df = pd.read_excel(file_path, engine='openpyxl')
+            except Exception:
+                df = pd.read_csv(file_path, encoding='utf-8-sig', thousands=',', skip_blank_lines=True)
+                df = df.loc[:, ~df.columns.str.contains('^Unnamed', na=False)]
+                df = df.dropna(axis=1, how='all')
+                df.columns = df.columns.str.strip()
+        return df
+
+    current_directory = '.'
+    all_files_in_dir = os.listdir(current_directory)
+    candidates = []
+    exclude_keywords = ['수율', '가동률', '목표달성율', '저가동설비']
+
+    for f in all_files_in_dir:
+        filename_without_ext, ext = os.path.splitext(f)
+        if ext.lower() not in ['.csv', '.xlsx', '.xls']:
+            continue
+        normalized_name = filename_without_ext.replace("(", "").replace(")", "").replace(" ", "")
+        if '생산실적현황' not in normalized_name:
+            continue
+        if any(ex_kw in normalized_name for ex_kw in exclude_keywords):
+            continue
+        candidates.append(f)
+
+    if not candidates:
+        return pd.DataFrame(), None
+
+    exact_matches = [f for f in candidates if os.path.splitext(f)[0] == '생산실적현황']
+    if exact_matches:
+        latest_file = max(exact_matches, key=lambda f: os.path.getmtime(os.path.join(current_directory, f)))
+    else:
+        latest_file = max(candidates, key=lambda f: os.path.getmtime(os.path.join(current_directory, f)))
+
+    file_path = os.path.join(current_directory, latest_file)
+    df = read_data_file(file_path)
+    return df, latest_file
+
+# --- 설비운영현황 보고서 로딩 ---
+@st.cache_data
+def load_equipment_operation_report() -> Tuple[pd.DataFrame, Optional[str]]:
+    """설비운영현황 보고서 파일 로딩"""
+    def read_data_file(file_path: str) -> pd.DataFrame:
+        file_ext = os.path.splitext(file_path)[1].lower()
+        if file_ext == '.csv':
+            df = pd.read_csv(file_path, encoding='utf-8-sig', thousands=',', skip_blank_lines=True)
+            df = df.loc[:, ~df.columns.str.contains('^Unnamed', na=False)]
+            df = df.dropna(axis=1, how='all')
+            df.columns = df.columns.str.strip()
+        else:
+            df = pd.read_excel(file_path, engine='openpyxl')
+            df.columns = df.columns.str.strip()
+        return df
+
+    current_directory = '.'
+    all_files_in_dir = os.listdir(current_directory)
+    candidates = []
+
+    for f in all_files_in_dir:
+        filename_without_ext, ext = os.path.splitext(f)
+        if ext.lower() not in ['.csv', '.xlsx', '.xls']:
+            continue
+        normalized_name = filename_without_ext.replace("(", "").replace(")", "").replace(" ", "")
+        if '설비운영현황' not in normalized_name:
+            continue
+        candidates.append(f)
+
+    if not candidates:
+        return pd.DataFrame(), None
+
+    latest_file = max(candidates, key=lambda f: os.path.getmtime(os.path.join(current_directory, f)))
+    file_path = os.path.join(current_directory, latest_file)
+    df = read_data_file(file_path)
+    return df, latest_file
+
 # --- AI 분석 엔진 ---
 def analyze_target_data(df: pd.DataFrame) -> str:
     """목표 달성률 데이터 분석 브리핑 생성"""
@@ -1623,6 +1710,83 @@ def daily_dataframe_to_html_table(df, font_size=14):
     html += "</tbody></table>"
     return html
 
+def equipment_operation_table_html(df, font_size=14):
+    """설비운영현황 DataFrame을 병합 셀 HTML 테이블로 변환"""
+    if df is None or df.empty:
+        return "<p>표시할 데이터가 없습니다.</p>"
+
+    rows = df.to_dict('records')
+    total_rows = len(rows)
+
+    factory_spans = [0] * total_rows
+    process_spans = [0] * total_rows
+    total_spans = [0] * total_rows
+
+    i = 0
+    while i < total_rows:
+        j = i
+        while j < total_rows and rows[j]['공장'] == rows[i]['공장']:
+            j += 1
+        factory_spans[i] = j - i
+        i = j
+
+    i = 0
+    while i < total_rows:
+        j = i
+        while j < total_rows and rows[j]['공장'] == rows[i]['공장'] and rows[j]['공정'] == rows[i]['공정']:
+            j += 1
+        process_spans[i] = j - i
+        total_spans[i] = j - i
+        i = j
+
+    html = f"""
+    <table style="width: 100%; border-collapse: collapse; font-size: {font_size}px !important;">
+    <thead>
+    <tr style="background-color: #f8f9fa; border-bottom: 2px solid #dee2e6;">
+    """
+    for col in df.columns:
+        html += f'<th style="padding: 8px; text-align: center; font-weight: bold; font-size: {font_size}px !important; border: 1px solid #dee2e6;">{col}</th>'
+    html += "</tr></thead><tbody>"
+
+    for idx, row in enumerate(rows):
+        is_factory_start = factory_spans[idx] > 0
+        is_process_start = process_spans[idx] > 0 and not is_factory_start
+        row_border = ""
+        if is_factory_start:
+            row_border = "border-top: 2px solid #6c757d;"
+        elif is_process_start:
+            row_border = "border-top: 2px solid #adb5bd;"
+        html += '<tr>'
+
+        if factory_spans[idx] > 0:
+            html += (
+                f'<td rowspan="{factory_spans[idx]}" '
+                f'style="padding: 8px; text-align: center; border: 1px solid #dee2e6; {row_border} font-weight: 600;">'
+                f'{row["공장"]}</td>'
+            )
+
+        if process_spans[idx] > 0:
+            html += (
+                f'<td rowspan="{process_spans[idx]}" '
+                f'style="padding: 8px; text-align: center; border: 1px solid #dee2e6; {row_border} font-weight: 600;">'
+                f'{row["공정"]}</td>'
+            )
+
+        if total_spans[idx] > 0:
+            html += (
+                f'<td rowspan="{total_spans[idx]}" '
+                f'style="padding: 8px; text-align: center; border: 1px solid #dee2e6; {row_border} font-weight: 600;">'
+                f'{row["가동대수(합계)"]}</td>'
+            )
+
+        html += f'<td style="padding: 8px; text-align: center; border: 1px solid #dee2e6; {row_border}">{row["분류"]}</td>'
+        html += f'<td style="padding: 8px; text-align: center; border: 1px solid #dee2e6; {row_border}">{row["가동대수(분류)"]}</td>'
+        html += f'<td style="padding: 8px; text-align: center; border: 1px solid #dee2e6; {row_border}">{row["생산상위품목"]}</td>'
+        html += '</tr>'
+
+    html += "</tbody></table>"
+    return html
+
 def create_download_section(df, tab_name, agg_level, start_date, end_date):
     """필터링된 데이터를 다운로드할 수 있는 섹션 생성"""
     if df.empty:
@@ -2455,17 +2619,32 @@ if selected_tab == "📊 일일 생산 현황 보고":
                 
                 # 표시용 데이터 준비
                 display_daily = pivot_with_target.copy()
+                if '목표수량' in display_daily.columns:
+                    display_daily['생산목표(일)'] = display_daily['목표수량'].fillna(0)
+                else:
+                    display_daily['생산목표(일)'] = 0
+                display_daily['생산실적(일)'] = display_daily['합계']
+                display_daily['차이'] = display_daily['생산실적(일)'] - display_daily['생산목표(일)']
+                display_daily['달성율(%)'] = display_daily.get('달성율', 0).fillna(0)
                 
                 # 날짜 포맷팅
                 display_daily['생산일자'] = pd.to_datetime(display_daily['생산일자']).dt.strftime('%m/%d')
                 
                 # 수치 포맷팅
-                for col in available_factories + ['합계']:
+                for col in available_factories + ['생산목표(일)', '생산실적(일)']:
                     display_daily[col] = display_daily[col].apply(lambda x: f"{x:,.0f}" if x > 0 else "-")
                 
-                display_daily['달성율'] = display_daily['달성율'].apply(lambda x: f"{x:.1f}%" if x > 0 else "-")
+                def format_diff(value):
+                    if pd.isna(value):
+                        return "-"
+                    if value == 0:
+                        return "0"
+                    return f"{value:+,.0f}"
                 
-                # 달성율에 따른 색상 및 아이콘 추가
+                display_daily['차이'] = display_daily['차이'].apply(format_diff)
+                display_daily['달성율(%)'] = display_daily['달성율(%)'].apply(lambda x: f"{x:.1f}%" if x > 0 else "-")
+
+                # 달성율(%)에 기존 상태 아이콘 적용
                 def add_status_icon(val):
                     try:
                         if '%' in str(val) and val != '-':
@@ -2479,11 +2658,13 @@ if selected_tab == "📊 일일 생산 현황 보고":
                     except:
                         pass
                     return val
-                
-                display_daily['상태'] = display_daily['달성율'].apply(add_status_icon)
+
+                display_daily['달성율(%)'] = display_daily['달성율(%)'].apply(add_status_icon)
                 
                 # 최종 표시 컬럼 선택
-                final_columns = ['생산일자'] + available_factories + ['합계', '상태']
+                final_columns = ['생산일자'] + available_factories + [
+                    '생산목표(일)', '생산실적(일)', '차이', '달성율(%)'
+                ]
                 display_final = display_daily[final_columns]
                 
                 # 누적 실적 요약 추가 (양품 기준)
@@ -2509,14 +2690,27 @@ if selected_tab == "📊 일일 생산 현황 보고":
                 html_daily_table = daily_dataframe_to_html_table(display_final, font_size=daily_font_size)
                 st.markdown(html_daily_table, unsafe_allow_html=True)
                 
-                # 범례 설명
+                # 표시 기준 안내
                 st.markdown("""
-                **상태 범례:**
-                - ✅ 100% 이상 달성
-                - ⚠️ 80-100% 달성  
-                - ❌ 80% 미만
+                **표시 기준:**
+                - 달성율(%) = 생산실적(일) / 생산목표(일) × 100
                 - 회색 배경: 주말
                 """)
+
+                # 일별 공장 가동현황
+                st.markdown("#### 🏭 일별 공장 가동현황")
+                st.caption("※ 전일 기준으로 집계된 설비운영현황 보고서입니다.")
+                op_summary, op_filename = load_equipment_operation_report()
+                if op_summary.empty:
+                    st.info("설비운영현황 보고서가 없습니다. analyzer_v4.1.py에서 설비운영현황을 생성해주세요.")
+                else:
+                    expected_cols = ['공장', '공정', '가동대수(합계)', '분류', '가동대수(분류)', '생산상위품목']
+                    missing_cols = [col for col in expected_cols if col not in op_summary.columns]
+                    if missing_cols:
+                        st.info(f"설비운영현황 보고서에 필요한 컬럼이 없습니다: {', '.join(missing_cols)}")
+                    else:
+                        display_df = op_summary[expected_cols].copy()
+                        st.markdown(equipment_operation_table_html(display_df, font_size=14), unsafe_allow_html=True)
             else:
                 month_label = "당월" if is_current_month else f"{latest_year}년 {latest_month}월"
                 st.info(f"{month_label} 완제품 생산 데이터([80] 누수/규격검사)가 부족합니다.")
