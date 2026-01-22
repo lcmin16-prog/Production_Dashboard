@@ -1,28 +1,31 @@
 ﻿공장,공정,가동대수(합계),분류,가동대수(분류),생산상위품목
-A관(1공장),[10] 사출조립,7,1-Day_Sph,3,1-day_58_Kontaktni-HA
-A관(1공장),[10] 사출조립,7,FRP_Sph,2,(NEW)S43-HD-Dry-14.4
+A관(1공장),[10] 사출조립,7,1-Day_Sph,2,1-day_58_Kontaktni-HA
+A관(1공장),[10] 사출조립,7,FRP_Sph,3,(NEW)S43-HD-Dry-14.4
 A관(1공장),[10] 사출조립,7,FRP_Toric,1,T55_소사각
 A관(1공장),[10] 사출조립,7,Si_1-Day_Toric,1,O2O2 D_UV_Toric_SMD
-A관(1공장),[20] 분리,4,FRP_Sph,4,Metha
+A관(1공장),[20] 분리,5,FRP_Sph,4,(NEW)S43-HD-Dry-14.4
+A관(1공장),[20] 분리,5,FRP_Toric,1,T55_소사각
 A관(1공장),[55] 접착/멸균,14,FRP_Color_Sph,2,Rose_color_원형
-A관(1공장),[55] 접착/멸균,14,FRP_Sph,9,(UV)CS30_원형_8.60
+A관(1공장),[55] 접착/멸균,14,FRP_Sph,7,(UV)CS30_원형_8.60
 A관(1공장),[55] 접착/멸균,14,FRP_Toric,1,T38_금캡(UV포함)
-A관(1공장),[55] 접착/멸균,14,Si_FRP_Sph,2,O2O2 M_Spherical(DK70)_K2-SMD_(소)
-C관(2공장),[10] 사출조립,23,1-Day_Color_Sph,21,1-Day_iris_Latin
-C관(2공장),[10] 사출조립,23,1-Day_Color_Toric,1,PIA_Strawberry Quartz CP-0.75 Toric_UV
-C관(2공장),[10] 사출조립,23,FRP_Color_Sph,1,Coral Brown_2T_(PBT)PIA_M(Y)
-C관(2공장),[20] 분리,25,1-Day_Color_Sph,20,1-Day_iris_Latin
-C관(2공장),[20] 분리,25,1-Day_Color_Toric,1,PIA D Toric_CP-1.25 Coffee Jelly_55% UV
+A관(1공장),[55] 접착/멸균,14,Si_FRP_Color_Sph,1,O2O2 M_Mysti Khaki EX_(중)
+A관(1공장),[55] 접착/멸균,14,Si_FRP_Sph,3,O2O2 M_Spherical(DK70)_K2-SMD_(소)
+C관(2공장),[10] 사출조립,32,1-Day_Color_Sph,28,PIA D_Gray Bunny_55% UV 14.2
+C관(2공장),[10] 사출조립,32,1-Day_Color_Toric,3,PIA D Toric_CP-1.25 Coffee Jelly_55% UV
+C관(2공장),[10] 사출조립,32,FRP_Color_Sph,1,Coral Brown_2T_(PBT)PIA_M(Y)
+C관(2공장),[20] 분리,25,1-Day_Color_Sph,19,PIA D_Dayglow Brown_55% UV 14.2
+C관(2공장),[20] 분리,25,1-Day_Color_Toric,1,PIA_Strawberry Quartz CP-0.75 Toric_UV
 C관(2공장),[20] 분리,25,1-Day_Sph,4,1-day_58_Kontaktni-HA
-C관(2공장),[55] 접착/멸균,17,1-Day_Color_Sph,14,1-Day_iris_Rhapsody
-C관(2공장),[55] 접착/멸균,17,1-Day_Color_Toric,2,PIA D Toric_CP-1.25 Coffee Jelly_55% UV
-C관(2공장),[55] 접착/멸균,17,1-Day_Sph,1,1-DAY_58_공용_Hioxi_MD로고
-S관(3공장),[10] 사출조립,6,1-Day_Sph,1,Clalen oneday A
-S관(3공장),[10] 사출조립,6,Si_1-Day_Color_Sph,3,Clalen O2O2 D_Mute Brown_45%
-S관(3공장),[10] 사출조립,6,Si_1-Day_Sph,2,O2O2 Spherical_K2-SMDH_OPHTALMIC
-S관(3공장),[20] 분리,11,1-Day_Sph,2,Clalen oneday A
-S관(3공장),[20] 분리,11,Si_1-Day_Color_Sph,5,Clalen O2O2 D_Lake Gray_45%
-S관(3공장),[20] 분리,11,Si_1-Day_Sph,4,O2O2 Spherical_K2-SMDH_OPHTALMIC
-S관(3공장),[55] 접착/멸균,7,1-Day_Sph,2,1-day_58_Kontaktni-HA
-S관(3공장),[55] 접착/멸균,7,Si_1-Day_Color_Sph,4,Clalen O2O2 D_Mute Brown_45%
-S관(3공장),[55] 접착/멸균,7,Si_1-Day_Sph,1,O2O2 Spherical_K2-SMDH_WHITE_OPHTALMIC
+C관(2공장),[20] 분리,25,FRP_Color_Sph,1,Coral Brown_2T_(PBT)PIA_M(Y)
+C관(2공장),[55] 접착/멸균,17,1-Day_Color_Sph,12,1-Day_iris_Latin
+C관(2공장),[55] 접착/멸균,17,1-Day_Color_Toric,3,PIA_Brown Fondue CP-1.25 Toric_UV
+C관(2공장),[55] 접착/멸균,17,1-Day_Sph,1,Metha_Daily
+C관(2공장),[55] 접착/멸균,17,FRP_Sph,1,Sincere_2week UV_Clear
+S관(3공장),[10] 사출조립,5,1-Day_Sph,1,Clalen oneday A
+S관(3공장),[10] 사출조립,5,Si_1-Day_Color_Sph,2,Clalen O2O2 D_Lake Gray_45%
+S관(3공장),[10] 사출조립,5,Si_1-Day_Sph,2,O2O2 Spherical_K2-SMDH_OPHTALMIC
+S관(3공장),[20] 분리,10,1-Day_Sph,2,Clalen oneday A
+S관(3공장),[20] 분리,10,Si_1-Day_Color_Sph,4,Clalen O2O2 D_Lake Gray_45%
+S관(3공장),[20] 분리,10,Si_1-Day_Sph,4,O2O2 Spherical_K2-SMDH_OPHTALMIC
+S관(3공장),[55] 접착/멸균,6,1-Day_Sph,3,1-day_58_Kontaktni-HA
+S관(3공장),[55] 접착/멸균,6,Si_1-Day_Color_Sph,3,Clalen O2O2 D_Mute Brown_45%
