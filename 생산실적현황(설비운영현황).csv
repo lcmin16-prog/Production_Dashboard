@@ -1,10 +1,27 @@
 ﻿공장,공정,가동대수(합계),분류,가동대수(분류),생산상위품목
-A관(1공장),[20] 분리,2,FRP_Sph,2,Metha
-A관(1공장),[55] 접착/멸균,2,FRP_Color_Sph,2,NewFusion_원형
-C관(2공장),[20] 분리,9,1-Day_Color_Sph,5,1-Day_iris_Suzy Gray
-C관(2공장),[20] 분리,9,1-Day_Color_Toric,2,PIA D Toric CP-1.25_Dazzle Gray_55% UV
-C관(2공장),[20] 분리,9,1-Day_Sph,1,1-day_58_Kontaktni-HA
-C관(2공장),[20] 분리,9,FRP_Color_Sph,1,Garnet_PIA_M(Y)
-S관(3공장),[20] 분리,3,Si_1-Day_Color_Sph,2,Clalen O2O2 D_Lake Gray_45%
-S관(3공장),[20] 분리,3,Si_1-Day_Sph,1,O2O2 Spherical_K2-SMDH_OPHTALMIC
-S관(3공장),[55] 접착/멸균,3,Si_1-Day_Sph,3,O2O2 Spherical_K2-SMDH_WHITE_OPHTALMIC
+A관(1공장),[10] 사출조립,7,1-Day_Sph,2,1-day_58_Kontaktni-HA
+A관(1공장),[10] 사출조립,7,FRP_Sph,3,(NEW)S43-HD-Dry-14.2
+A관(1공장),[10] 사출조립,7,FRP_Toric,1,T38_(UV포함)
+A관(1공장),[10] 사출조립,7,Si_1-Day_Toric,1,O2O2 D_UV_Toric_SMD
+A관(1공장),[20] 분리,6,FRP_Sph,5,Metha
+A관(1공장),[20] 분리,6,FRP_Toric,1,T38_(UV포함)
+A관(1공장),[55] 접착/멸균,12,FRP_Color_Sph,6,Rose_color_원형
+A관(1공장),[55] 접착/멸균,12,FRP_Sph,3,US55-2(M)_소사각
+A관(1공장),[55] 접착/멸균,12,Si_FRP_Sph,3,O2O2 M_Spherical(DK70)_K2-SMD_(소)
+C관(2공장),[10] 사출조립,26,1-Day_Color_Sph,23,1-Day_iris_SoulBrown
+C관(2공장),[10] 사출조립,26,1-Day_Color_Toric,3,Toric_CP-1.25_ALICIA BROWN
+C관(2공장),[20] 분리,25,1-Day_Color_Sph,20,1-Day_iris_Rhapsody
+C관(2공장),[20] 분리,25,1-Day_Color_Toric,2,Toric_CP-1.25_ALICIA BROWN
+C관(2공장),[20] 분리,25,1-Day_Sph,3,1-day_58_Kontaktni-HA
+C관(2공장),[55] 접착/멸균,17,1-Day_Color_Sph,12,1-Day_iris_SoulBrown
+C관(2공장),[55] 접착/멸균,17,1-Day_Sph,4,1-Day_58_M
+C관(2공장),[55] 접착/멸균,17,FRP_Sph,1,Sincere_2week UV_Clear
+S관(3공장),[10] 사출조립,6,Si_1-Day_Color_Sph,4,Clalen O2O2 D_Deep Black_45%
+S관(3공장),[10] 사출조립,6,Si_1-Day_Sph,2,O2O2 Spherical_K2-SMDH_OPHTALMIC
+S관(3공장),[20] 분리,12,1-Day_Sph,4,Clalen oneday A
+S관(3공장),[20] 분리,12,Si_1-Day_Color_Sph,5,Clalen O2O2 D_Deep Black_45%
+S관(3공장),[20] 분리,12,Si_1-Day_Sph,3,O2O2 Spherical_K2-SMDH_OPHTALMIC
+S관(3공장),[55] 접착/멸균,6,1-Day_Color_Sph,1,Clalen D_Mimosa Brown
+S관(3공장),[55] 접착/멸균,6,1-Day_Sph,1,Clalen oneday A(O2 Edition)
+S관(3공장),[55] 접착/멸균,6,Si_1-Day_Color_Sph,1,Clalen O2O2 D_Lake Gray_45%
+S관(3공장),[55] 접착/멸균,6,Si_1-Day_Sph,3,O2O2 Spherical_K2-SMDH_WHITE_OPHTALMIC

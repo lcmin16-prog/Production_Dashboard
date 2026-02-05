@@ -183,7 +183,7 @@ def load_production_data() -> Tuple[pd.DataFrame, Optional[str]]:
     current_directory = '.'
     all_files_in_dir = os.listdir(current_directory)
     candidates = []
-    exclude_keywords = ['수율', '가동률', '목표달성율', '저가동설비']
+    exclude_keywords = ['수율', '가동률', '목표달성율', '저가동설비', '설비운영현황']
 
     for f in all_files_in_dir:
         filename_without_ext, ext = os.path.splitext(f)
@@ -2711,6 +2711,68 @@ if selected_tab == "📊 일일 생산 현황 보고":
                     else:
                         display_df = op_summary[expected_cols].copy()
                         st.markdown(equipment_operation_table_html(display_df, font_size=14), unsafe_allow_html=True)
+
+                        # 상세 드릴다운 (기계코드/품명/양품수량/불량수량)
+                        prod_df, _ = load_production_data()
+                        if prod_df.empty:
+                            st.info("상세 확인용 생산실적 파일이 없습니다.")
+                        else:
+                            detail_df = prod_df.copy()
+                            if '상태' in detail_df.columns:
+                                status_series = detail_df['상태'].fillna('').astype(str).str.strip()
+                                detail_df = detail_df[status_series.isin(['확인', '저장'])].copy()
+
+                            required_cols = ['공장', '공정코드', '기계코드', '품명', '양품수량', '불량수량']
+                            missing_cols = [col for col in required_cols if col not in detail_df.columns]
+                            if missing_cols:
+                                st.info(f"상세 확인용 필수 컬럼이 부족합니다: {', '.join(missing_cols)}")
+                            else:
+                                detail_df['양품수량'] = pd.to_numeric(detail_df['양품수량'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                                detail_df['불량수량'] = pd.to_numeric(detail_df['불량수량'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+
+                                def map_factory(value):
+                                    text = str(value)
+                                    if 'A' in text or '1공장' in text or text.strip() == '1':
+                                        return 'A관(1공장)'
+                                    if 'C' in text or '2공장' in text or text.strip() == '2':
+                                        return 'C관(2공장)'
+                                    if 'S' in text or '3공장' in text or text.strip() == '3':
+                                        return 'S관(3공장)'
+                                    return None
+
+                                process_map = {'10': '[10] 사출조립', '20': '[20] 분리', '55': '[55] 접착/멸균'}
+
+                                def map_process(value):
+                                    if pd.isna(value):
+                                        return None
+                                    text = str(value)
+                                    match = re.search(r'\[(\d+)\]', text)
+                                    if not match:
+                                        match = re.search(r'(\d+)', text)
+                                    if not match:
+                                        return None
+                                    return process_map.get(match.group(1))
+
+                                detail_df['공장_표시'] = detail_df['공장'].apply(map_factory)
+                                detail_df['공정_표시'] = detail_df['공정코드'].apply(map_process)
+                                detail_df['신규분류요약'] = detail_df.get('신규분류요약', '미분류').fillna('미분류')
+
+                                for _, row in display_df.iterrows():
+                                    expander_title = f"{row['공장']} / {row['공정']} / {row['분류']}"
+                                    with st.expander(expander_title):
+                                        subset = detail_df[
+                                            (detail_df['공장_표시'] == row['공장']) &
+                                            (detail_df['공정_표시'] == row['공정']) &
+                                            (detail_df['신규분류요약'] == row['분류'])
+                                        ].copy()
+                                        if subset.empty:
+                                            st.info("해당 구간의 상세 데이터가 없습니다.")
+                                        else:
+                                            detail_summary = subset.groupby(['기계코드', '품명'], as_index=False).agg(
+                                                양품수량=('양품수량', 'sum'),
+                                                불량수량=('불량수량', 'sum')
+                                            ).sort_values(by=['양품수량', '불량수량'], ascending=False)
+                                            st.dataframe(detail_summary, use_container_width=True)
             else:
                 month_label = "당월" if is_current_month else f"{latest_year}년 {latest_month}월"
                 st.info(f"{month_label} 완제품 생산 데이터([80] 누수/규격검사)가 부족합니다.")
