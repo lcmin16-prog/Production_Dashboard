@@ -1121,6 +1121,7 @@ def reset_filters(min_data_date, max_data_date, reference_date=None):
     st.session_state.date_range = (start, end)
     st.session_state.agg_level = '월별'
     st.session_state.range_reference_date = end
+    apply_auto_chart_options(start, end)
 
 
 def set_maximum_period(min_data_date, max_data_date):
@@ -1128,6 +1129,153 @@ def set_maximum_period(min_data_date, max_data_date):
     st.session_state.date_range = (min_data_date, max_data_date)
     st.session_state.agg_level = '월별'
     st.session_state.range_reference_date = max_data_date
+    apply_auto_chart_options(min_data_date, max_data_date)
+
+
+def _clip_period(start_date: date, end_date: date, min_data_date: date, max_data_date: date):
+    """데이터 범위 안으로 기간을 보정합니다."""
+    clipped_start = max(start_date, min_data_date)
+    clipped_end = min(end_date, max_data_date)
+    if clipped_start > clipped_end:
+        return min_data_date, max_data_date
+    return clipped_start, clipped_end
+
+
+def get_quick_period_range(period_key: str, min_data_date: date, max_data_date: date):
+    """빠른 기간 버튼에 해당하는 날짜 범위를 계산합니다."""
+    today = date.today()
+    reference_date = min(today, max_data_date) if today >= min_data_date else max_data_date
+
+    if period_key == 'max':
+        return min_data_date, max_data_date
+
+    if period_key == 'this_month':
+        start = date(reference_date.year, reference_date.month, 1)
+        if reference_date.month == 12:
+            end = date(reference_date.year, 12, 31)
+        else:
+            end = date(reference_date.year, reference_date.month + 1, 1) - timedelta(days=1)
+        return _clip_period(start, end, min_data_date, max_data_date)
+
+    if period_key == 'this_quarter':
+        quarter_idx = (reference_date.month - 1) // 3
+        start_month = quarter_idx * 3 + 1
+        end_month = start_month + 2
+        start = date(reference_date.year, start_month, 1)
+        if end_month == 12:
+            end = date(reference_date.year, 12, 31)
+        else:
+            end = date(reference_date.year, end_month + 1, 1) - timedelta(days=1)
+        return _clip_period(start, end, min_data_date, max_data_date)
+
+    if period_key == 'this_half':
+        if reference_date.month <= 6:
+            start, end = date(reference_date.year, 1, 1), date(reference_date.year, 6, 30)
+        else:
+            start, end = date(reference_date.year, 7, 1), date(reference_date.year, 12, 31)
+        return _clip_period(start, end, min_data_date, max_data_date)
+
+    if period_key == 'this_year':
+        start, end = date(reference_date.year, 1, 1), date(reference_date.year, 12, 31)
+        return _clip_period(start, end, min_data_date, max_data_date)
+
+    if period_key == 'last_year':
+        target_year = reference_date.year - 1
+        start, end = date(target_year, 1, 1), date(target_year, 12, 31)
+        return _clip_period(start, end, min_data_date, max_data_date)
+
+    if period_key == 'last_2years':
+        start, end = date(reference_date.year - 1, 1, 1), date(reference_date.year, 12, 31)
+        return _clip_period(start, end, min_data_date, max_data_date)
+
+    if period_key == 'last_3years':
+        start, end = date(reference_date.year - 2, 1, 1), date(reference_date.year, 12, 31)
+        return _clip_period(start, end, min_data_date, max_data_date)
+
+    return min_data_date, max_data_date
+
+
+def apply_quick_period(period_key: str, min_data_date: date, max_data_date: date):
+    """빠른 기간 버튼 클릭 시 date_range를 갱신합니다."""
+    start, end = get_quick_period_range(period_key, min_data_date, max_data_date)
+    st.session_state.date_range = (start, end)
+    st.session_state.range_reference_date = end
+    apply_auto_chart_options(start, end)
+
+
+def _scaled_chart_height(base_height: int, period_days: int) -> int:
+    """기간 길이에 비례해 차트 높이를 보정합니다."""
+    if period_days <= 31:
+        factor = 0.9
+    elif period_days <= 92:
+        factor = 1.0
+    elif period_days <= 183:
+        factor = 1.15
+    elif period_days <= 366:
+        factor = 1.3
+    else:
+        factor = 1.45
+    scaled = int(round((base_height * factor) / 50.0) * 50)
+    return min(1000, max(400, scaled))
+
+
+def apply_auto_chart_options(start_date: date, end_date: date):
+    """기간 변경 시 차트 옵션(높이/축범위)을 자동 추천값으로 갱신합니다."""
+    period_days = max(1, (end_date - start_date).days + 1)
+
+    chart_height_defaults = {
+        "yield_bar_chart_height": 600,
+        "trend_chart_height": 600,
+        "detail_chart_height": 600,
+        "target_bar_chart_height": 600,
+        "trend_analysis_chart_height": 600,
+        "outlier_chart_height": 600,
+        "matrix_chart_height": 600,
+        "yield_factory_chart_height": 600,
+        "process_yield_chart_height": 600,
+        "yield_product_chart_height": 600,
+        "overall_chart_height": 700,
+        "factory_performance_chart_height": 550,
+        "product_performance_chart_height": 650,
+        "machine_performance_chart_height": 600,
+    }
+    for key, base_height in chart_height_defaults.items():
+        st.session_state[key] = _scaled_chart_height(base_height, period_days)
+
+    if period_days <= 92:
+        st.session_state["detail_rate_range_slider"] = (0.0, 120.0)
+        st.session_state["process_yield_range"] = (80, 100)
+        st.session_state["overall_yield_range"] = (85.0, 100.0)
+    elif period_days <= 366:
+        st.session_state["detail_rate_range_slider"] = (0.0, 130.0)
+        st.session_state["process_yield_range"] = (70, 105)
+        st.session_state["overall_yield_range"] = (75.0, 100.0)
+    else:
+        st.session_state["detail_rate_range_slider"] = (0.0, 140.0)
+        st.session_state["process_yield_range"] = (60, 110)
+        st.session_state["overall_yield_range"] = (65.0, 100.0)
+
+    st.session_state["util_range_filter"] = (0, 100)
+    st.session_state["_auto_chart_tune_pending"] = True
+
+
+def _sync_range_session(key: str, default_value, min_value, max_value):
+    """range slider 세션값을 현재 허용 범위에 맞게 보정합니다."""
+    current = st.session_state.get(key, default_value)
+    if not isinstance(current, (list, tuple)) or len(current) != 2:
+        current = default_value
+
+    low = max(min_value, min(current[0], max_value))
+    high = max(min_value, min(current[1], max_value))
+    if low > high:
+        low, high = default_value
+
+    if isinstance(default_value[0], int):
+        low, high = int(round(low)), int(round(high))
+    else:
+        low, high = float(low), float(high)
+
+    st.session_state[key] = (low, high)
 
 # --- 대시보드 UI 시작 ---
 st.title("👑 지능형 생산 대시보드 V105")
@@ -2135,9 +2283,29 @@ def create_shared_filter_controls(df_for_current_tab):
         if "분석" not in selected_tab: header_title = f"{selected_tab} 분석"
         st.header(header_title, anchor=False)
 
-    filter_cols = st.columns([5.4, 1.1, 1.1, 3.4])
+    filter_cols = st.columns([6, 1, 3.5])
     with filter_cols[0]:
         st.date_input("조회할 기간을 선택하세요", min_value=min_date_global, max_value=max_date_global, key='date_range')
+        quick_button_specs = [
+            ("당월", "this_month"),
+            ("당분기", "this_quarter"),
+            ("당반기", "this_half"),
+            ("올해", "this_year"),
+            ("작년", "last_year"),
+            ("2개년", "last_2years"),
+            ("3개년", "last_3years"),
+            ("최대기간", "max"),
+        ]
+        quick_cols = st.columns(8)
+        for idx, (label, period_key) in enumerate(quick_button_specs):
+            with quick_cols[idx]:
+                st.button(
+                    label,
+                    key=f"quick_period_{period_key}_{selected_tab}",
+                    on_click=apply_quick_period,
+                    args=(period_key, min_date_global, max_date_global),
+                    use_container_width=True
+                )
     with filter_cols[1]:
         st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
         st.button(
@@ -2147,14 +2315,6 @@ def create_shared_filter_controls(df_for_current_tab):
             help="현재 조회 기준일이 속한 연도의 모든 데이터를 기준으로 월별 집계합니다."
         )
     with filter_cols[2]:
-        st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
-        st.button(
-            "최대 기간",
-            on_click=set_maximum_period,
-            args=(min_date_global, max_date_global),
-            help="데이터가 존재하는 전체 기간으로 조회 범위를 확장하고 월별로 집계합니다."
-        )
-    with filter_cols[3]:
         st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
         st.radio("집계 기준", options=['일별', '주간별', '월별', '분기별', '반기별', '년도별'], key='agg_level', horizontal=True)
 
@@ -3204,12 +3364,18 @@ elif selected_tab == "목표 달성률":
                                         buffer = (max_rate_val - min_rate_val) * 0.1 if max_rate_val > min_rate_val else 5.0
                                         slider_min = max(0.0, min_rate_val - buffer)
                                         slider_max = max_rate_val + buffer
+                                        rate_slider_max = max(150.0, round(slider_max, -1))
+                                        _sync_range_session(
+                                            "detail_rate_range_slider",
+                                            (float(slider_min), float(slider_max)),
+                                            0.0,
+                                            rate_slider_max
+                                        )
 
                                         rate_range = st.slider(
                                             "달성률(%) Y축 범위 선택",
                                             min_value=0.0,
-                                            max_value=max(150.0, round(slider_max, -1)),
-                                            value=(float(slider_min), float(slider_max)),
+                                            max_value=rate_slider_max,
                                             step=1.0,
                                             format="%.0f%%",
                                             key="detail_rate_range_slider"
@@ -3677,13 +3843,18 @@ elif selected_tab == "수율 분석":
                             # 데이터의 최소값과 최대값을 기본값으로 설정
                             min_yield_value = max(0, int(process_yield_data['수율(%)'].min()) - 5)
                             max_yield_value = min(120, int(process_yield_data['수율(%)'].max()) + 5)
+                            _sync_range_session(
+                                "process_yield_range",
+                                (int(min_yield_value), int(max_yield_value)),
+                                0,
+                                120
+                            )
                             
                             # 범위 슬라이더 (하나의 컨트롤로 최소/최대값 동시 조정)
                             yield_range = st.slider(
                                 "수율(%) 축 범위",
                                 min_value=0, 
                                 max_value=120, 
-                                value=(min_yield_value, max_yield_value), 
                                 step=1, 
                                 key="process_yield_range",
                                 help="차트 Y축의 수율 범위를 조정합니다. 왼쪽 핸들은 최소값, 오른쪽 핸들은 최대값입니다."
@@ -4198,9 +4369,10 @@ elif selected_tab == "가동률 분석":
                                               key='util_process_filter')
             with filter_cols[2]:
                 # 가동률 범위 필터
+                _sync_range_session('util_range_filter', (0, 100), 0, 100)
                 min_util, max_util = st.slider("가동률 범위 (%)", 
                                              min_value=0, max_value=100, 
-                                             value=(0, 100), key='util_range_filter')
+                                             key='util_range_filter')
             
             # 필터 적용
             df_equipment = df_filtered.copy()
@@ -5093,10 +5265,14 @@ elif selected_tab == "종합 분석":
             with control_cols_2[0]: 
                 min_yield_val = combo_data['종합수율(%)'].min() if not combo_data.empty else 0
                 max_yield_val = combo_data['종합수율(%)'].max() if not combo_data.empty else 100
-                buffer = (max_yield_val - min_yield_val) * 0.5 if max_yield_val > min_yield_val else 5.0
+                spread = max_yield_val - min_yield_val
+                buffer = max(12.0, spread * 2.0) if max_yield_val > min_yield_val else 12.0
                 slider_min = max(0.0, min_yield_val - buffer)
-                slider_max = min(100.0, max_yield_val + buffer)
-                yield_range = st.slider("종합 수율(%) 축 범위", 0.0, 100.0, (slider_min, slider_max), 1.0, format="%.0f%%", key="overall_yield_range")
+                slider_max = min(100.0, max_yield_val + max(3.0, spread * 0.8))
+                if st.session_state.get("_auto_chart_tune_pending", False):
+                    st.session_state["overall_yield_range"] = (float(slider_min), float(slider_max))
+                _sync_range_session("overall_yield_range", (float(slider_min), float(slider_max)), 0.0, 100.0)
+                yield_range = st.slider("종합 수율(%) 축 범위", min_value=0.0, max_value=100.0, step=1.0, format="%.0f%%", key="overall_yield_range")
             with control_cols_2[1]: chart_height = st.slider("차트 높이 조절", 400, 1000, 700, 50, key="overall_chart_height")
             with control_cols_2[2]: show_labels = st.toggle("차트 라벨 표시", value=True, key="overall_show_labels")
             with control_cols_2[3]: 
@@ -5109,6 +5285,8 @@ elif selected_tab == "종합 분석":
                         comprehensive_axis_title_size = st.slider("축 제목 크기", min_value=10, max_value=30, value=18, step=1, key="comprehensive_axis_title_size")
                     with col_set3:
                         comprehensive_axis_tick_size = st.slider("축 서식 크기", min_value=8, max_value=30, value=18, step=1, key="comprehensive_axis_tick_size")
+            if st.session_state.get("_auto_chart_tune_pending", False):
+                st.session_state["_auto_chart_tune_pending"] = False
             
             # 고차원적 AI 브리핑
             st.subheader("🤖 AI Analyst 종합 분석 브리핑", anchor=False)
