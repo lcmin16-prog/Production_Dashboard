@@ -2867,6 +2867,11 @@ if selected_tab == "📊 일일 생산 현황 보고":
                 total_production_current = pivot_daily['합계'].sum()
                 total_target_current = df_target_final['목표_총_생산량'].sum() if not df_target_final.empty else 0
                 overall_achievement = (total_production_current / total_target_current * 100) if total_target_current > 0 else 0
+                factory_total_labels = ["A관(1공장)", "C관(2공장)", "S관(3공장)"]
+                factory_total_text = []
+                for factory_label in factory_total_labels:
+                    factory_total_value = pivot_daily[factory_label].sum() if factory_label in pivot_daily.columns else 0
+                    factory_total_text.append(f"{factory_label}: {factory_total_value:,.0f}개")
                 
                 col_summary1, col_summary2, col_summary3 = st.columns(3)
                 with col_summary1:
@@ -2874,6 +2879,14 @@ if selected_tab == "📊 일일 생산 현황 보고":
                     st.metric(f"🎯 {month_label} 목표량", f"{total_target_current:,.0f}개")
                 with col_summary2:
                     st.metric(f"🏭 {month_label} 총 생산량", f"{total_production_current:,.0f}개")
+                    st.markdown(
+                        (
+                            f"<p style='font-size:0.8rem; color:#6b7280; margin-top:-8px; line-height:1.45;'>"
+                            f"{'<br>'.join(factory_total_text)}"
+                            f"</p>"
+                        ),
+                        unsafe_allow_html=True
+                    )
                 with col_summary3:
                     st.metric(f"📊 {month_label} 달성률", f"{overall_achievement:.1f}%")
                 
