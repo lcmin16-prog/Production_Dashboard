@@ -57,6 +57,18 @@ def optimize_dataframe_dtypes(df: pd.DataFrame) -> pd.DataFrame:
 
     return optimized
 
+
+def fillna_numeric_only(df: pd.DataFrame, value: float = 0) -> pd.DataFrame:
+    """Fill NaN only for numeric columns to avoid categorical fill errors."""
+    if df is None or df.empty:
+        return df
+    numeric_cols = df.select_dtypes(include='number').columns
+    if len(numeric_cols) == 0:
+        return df
+    df = df.copy()
+    df.loc[:, numeric_cols] = df.loc[:, numeric_cols].fillna(value)
+    return df
+
 # --- 화면 너비에 따른 동적 배율 조정 ---
 st.markdown("""
 <script>
@@ -4102,7 +4114,8 @@ elif selected_tab == "수율 분석":
                             line_combined['종합수율(%)'] *= 100
                             
                             # 3. 데이터 병합 및 보정
-                            df_to_plot = pd.merge(bar_combined, line_combined, on='period', how='outer').fillna(0)
+                            df_to_plot = pd.merge(bar_combined, line_combined, on='period', how='outer')
+                            df_to_plot = fillna_numeric_only(df_to_plot, 0)
                             df_to_plot.loc[df_to_plot['완제품_제조개수'] == 0, '종합수율(%)'] = 0
                             
                             if not df_to_plot.empty:
@@ -4242,7 +4255,8 @@ elif selected_tab == "불량유형별 분석":
             total_prod_resampled = get_resampled_data(prod_data_source, agg_level, ['생산수량'], group_by_cols=['period']).rename(columns={'생산수량': '총_생산수량'})
             
             if not total_defect_resampled.empty:
-                combo_data = pd.merge(total_defect_resampled, total_prod_resampled, on='period', how='outer').fillna(0)
+                combo_data = pd.merge(total_defect_resampled, total_prod_resampled, on='period', how='outer')
+                combo_data = fillna_numeric_only(combo_data, 0)
                 production_for_rate = combo_data['총_생산수량'].replace(0, pd.NA)
                 with pd.option_context('mode.use_inf_as_na', True):
                     combo_data['총_불량률(%)'] = (100 * combo_data['유형별_불량수량'] / production_for_rate).fillna(0)
@@ -5237,7 +5251,7 @@ elif selected_tab == "가동률 분석":
             equipment_performance.columns = ['평균_가동률', '가동률_표준편차', '총_생산량']
             # 가동률 안정성 계산 (음수 방지 및 NaN 처리)
             equipment_performance['가동률_안정성'] = (100 - equipment_performance['가동률_표준편차']).clip(lower=0)
-            equipment_performance = equipment_performance.fillna(0)  # NaN 값을 0으로 대체
+            equipment_performance = fillna_numeric_only(equipment_performance, 0)  # NaN 값을 0으로 대체
             equipment_performance = equipment_performance.reset_index()
             
             # 선택한 지표에 따라 정렬
@@ -5323,7 +5337,8 @@ elif selected_tab == "종합 분석":
         if bar_data.empty or line_data.empty: st.info("선택된 기간에 분석할 데이터가 부족합니다.")
         else:
             merge_cols = ['period', '공장'] if compare_factories else ['period']
-            combo_data = pd.merge(bar_data, line_data, on=merge_cols, how='outer').sort_values('period').fillna(0)
+            combo_data = pd.merge(bar_data, line_data, on=merge_cols, how='outer').sort_values('period')
+            combo_data = fillna_numeric_only(combo_data, 0)
             combo_data.loc[combo_data['총_생산수량'] == 0, '종합수율(%)'] = 0
             
             st.markdown("---"); st.subheader("차트 옵션 조정", anchor=False)
@@ -5566,7 +5581,8 @@ elif selected_tab == "종합 분석":
                                 line_combined['종합수율(%)'] *= 100
                                 
                                 # 3. 데이터 병합 및 보정
-                                df_to_plot_pg = pd.merge(bar_combined, line_combined, on='period', how='outer').fillna(0)
+                                df_to_plot_pg = pd.merge(bar_combined, line_combined, on='period', how='outer')
+                                df_to_plot_pg = fillna_numeric_only(df_to_plot_pg, 0)
                                 df_to_plot_pg.loc[df_to_plot_pg['완제품_제조개수'] == 0, '종합수율(%)'] = 0
                                 df_to_plot_pg['신규분류요약'] = "선택항목 종합"
                             else:
@@ -5582,7 +5598,8 @@ elif selected_tab == "종합 분석":
                                 line_data_pg['종합수율(%)'] *= 100
                                 
                                 # 3. 데이터 병합 및 보정
-                                df_to_plot_pg = pd.merge(bar_data_pg, line_data_pg, on=['period', '신규분류요약'], how='outer').sort_values('period').fillna(0)
+                                df_to_plot_pg = pd.merge(bar_data_pg, line_data_pg, on=['period', '신규분류요약'], how='outer').sort_values('period')
+                                df_to_plot_pg = fillna_numeric_only(df_to_plot_pg, 0)
                                 df_to_plot_pg.loc[df_to_plot_pg['완제품_제조개수'] == 0, '종합수율(%)'] = 0
 
                             if not df_to_plot_pg.empty:
