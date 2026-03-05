@@ -18,6 +18,44 @@ from chart_utils import (
 # --- 페이지 기본 설정 ---
 st.set_page_config(layout="wide", page_title="지능형 생산 대시보드 V105", page_icon="👑")
 
+TAB_REQUIRED_KEYS = {
+    "📊 일일 생산 현황 보고": {"target", "yield"},
+    "종합 분석": {"target", "yield"},
+    "목표 달성률": {"target", "yield"},
+    "수율 분석": {"yield"},
+    "생산실적 상세조회": {"yield"},
+    "가동률 분석": {"utilization"},
+    "불량유형별 분석": {"defect"},
+}
+
+
+def get_required_data_keys(selected_tab: str) -> set:
+    """선택된 탭에서 필요한 데이터 키 집합을 반환합니다."""
+    return TAB_REQUIRED_KEYS.get(selected_tab, {"target", "yield"})
+
+
+def optimize_dataframe_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """메모리 절감을 위해 숫자형 다운캐스팅 및 저카디널리티 문자열 category 변환."""
+    if df is None or df.empty:
+        return df
+
+    optimized = df.copy()
+
+    for col in optimized.columns:
+        series = optimized[col]
+        if pd.api.types.is_float_dtype(series):
+            optimized[col] = pd.to_numeric(series, downcast='float')
+        elif pd.api.types.is_integer_dtype(series):
+            optimized[col] = pd.to_numeric(series, downcast='integer')
+        elif pd.api.types.is_object_dtype(series):
+            row_count = len(series)
+            if row_count >= 1000:
+                nunique = series.nunique(dropna=True)
+                if 0 < nunique / row_count <= 0.2:
+                    optimized[col] = series.astype('category')
+
+    return optimized
+
 # --- 화면 너비에 따른 동적 배율 조정 ---
 st.markdown("""
 <script>
@@ -42,9 +80,15 @@ window.addEventListener('resize', adjustZoom);
 
 # --- 데이터 로딩 및 캐싱 ---
 @st.cache_data
-def load_all_data() -> Dict[str, Tuple[pd.DataFrame, Optional[str]]]:
+def load_all_data(selected_keys: Optional[Tuple[str, ...]] = None) -> Dict[str, Tuple[pd.DataFrame, Optional[str]]]:
     """파일 로딩 및 데이터 전처리"""
     data_frames = {}
+    defect_detail_tokens = ['상세', '설비별', 'detail']
+
+    def is_defect_detail_file(normalized_name: str) -> bool:
+        lowered = normalized_name.lower()
+        return any(token in normalized_name for token in defect_detail_tokens[:2]) or ('detail' in lowered)
+
     keywords = {
         'target': '목표달성율', 
         'yield': '수율', 
@@ -56,6 +100,9 @@ def load_all_data() -> Dict[str, Tuple[pd.DataFrame, Optional[str]]]:
     all_files_in_dir = os.listdir(current_directory)
 
     for key, keyword_info in keywords.items():
+        if selected_keys and key not in selected_keys:
+            data_frames[key] = (pd.DataFrame(), None)
+            continue
         try:
             relevant_files = []
             for f in all_files_in_dir:
@@ -69,6 +116,9 @@ def load_all_data() -> Dict[str, Tuple[pd.DataFrame, Optional[str]]]:
                 if key == 'defect':
                     kw_base, kw_opt = keyword_info
                     if kw_base in normalized_name and kw_opt in normalized_name:
+                        # 설비별 상세분석 파일은 기본 로딩 대상에서 제외
+                        if is_defect_detail_file(normalized_name):
+                            continue
                         relevant_files.append(f)
                 else:
                     if keyword_info in normalized_name:
@@ -103,6 +153,7 @@ def load_all_data() -> Dict[str, Tuple[pd.DataFrame, Optional[str]]]:
                         rename_dict['불량수량_1'] = '유형별_불량수량'
                     df = df.rename(columns=rename_dict)
 
+                df = optimize_dataframe_dtypes(df)
                 data_frames[key] = (df, latest_file)
             else:
                  data_frames[key] = (pd.DataFrame(), None)
@@ -157,7 +208,7 @@ def load_production_data() -> Tuple[pd.DataFrame, Optional[str]]:
         latest_file = max(candidates, key=lambda f: os.path.getmtime(os.path.join(current_directory, f)))
 
     file_path = os.path.join(current_directory, latest_file)
-    df = read_data_file(file_path)
+    df = optimize_dataframe_dtypes(read_data_file(file_path))
     return df, latest_file
 
 # --- 설비운영현황 보고서 로딩 ---
@@ -213,23 +264,23 @@ def load_equipment_operation_report() -> Tuple[pd.DataFrame, pd.DataFrame, Optio
         detail_df = pd.read_excel(file_path, sheet_name=detail_sheet) if detail_sheet else pd.DataFrame()
         summary_df.columns = summary_df.columns.str.strip()
         detail_df.columns = detail_df.columns.str.strip() if not detail_df.empty else detail_df.columns
-        return summary_df, detail_df, latest_file
+        return optimize_dataframe_dtypes(summary_df), optimize_dataframe_dtypes(detail_df), latest_file
 
     summary_candidates = [f for f in candidates if '상세' not in f]
     detail_candidates = [f for f in candidates if '상세' in f]
     latest_summary = max(summary_candidates, key=lambda f: os.path.getmtime(os.path.join(current_directory, f))) if summary_candidates else max(candidates, key=lambda f: os.path.getmtime(os.path.join(current_directory, f)))
     summary_path = os.path.join(current_directory, latest_summary)
-    summary_df = read_data_file(summary_path)
+    summary_df = optimize_dataframe_dtypes(read_data_file(summary_path))
 
     detail_df = pd.DataFrame()
     if summary_candidates:
         detail_guess = os.path.splitext(latest_summary)[0] + "_상세" + os.path.splitext(latest_summary)[1]
         detail_path = os.path.join(current_directory, detail_guess)
         if os.path.exists(detail_path):
-            detail_df = read_data_file(detail_path)
+            detail_df = optimize_dataframe_dtypes(read_data_file(detail_path))
         elif detail_candidates:
             latest_detail = max(detail_candidates, key=lambda f: os.path.getmtime(os.path.join(current_directory, f)))
-            detail_df = read_data_file(os.path.join(current_directory, latest_detail))
+            detail_df = optimize_dataframe_dtypes(read_data_file(os.path.join(current_directory, latest_detail)))
 
     return summary_df, detail_df, latest_summary
 
@@ -887,7 +938,11 @@ def _sync_range_session(key: str, default_value, min_value, max_value):
 # --- 대시보드 UI 시작 ---
 st.title("👑 지능형 생산 대시보드 V105")
 
-all_data = load_all_data()
+tab_list = ["📊 일일 생산 현황 보고", "종합 분석", "목표 달성률", "수율 분석", "생산실적 상세조회", "가동률 분석", "불량유형별 분석"]
+selected_tab_for_loading = st.session_state.get('main_tab_selector', tab_list[0])
+required_data_keys = tuple(sorted(get_required_data_keys(selected_tab_for_loading)))
+
+all_data = load_all_data(selected_keys=required_data_keys)
 df_target_orig, target_filename = all_data.get('target', (pd.DataFrame(), None)); df_yield_orig, yield_filename = all_data.get('yield', (pd.DataFrame(), None)); df_utilization_orig, util_filename = all_data.get('utilization', (pd.DataFrame(), None)); df_defect_orig, defect_filename = all_data.get('defect', (pd.DataFrame(), None))
 
 if not df_target_orig.empty: 
@@ -952,9 +1007,17 @@ if 'date_range' not in st.session_state or 'agg_level' not in st.session_state:
 if 'range_reference_date' not in st.session_state:
     st.session_state.range_reference_date = st.session_state.date_range[1] if 'date_range' in st.session_state else date.today()
 
-st.sidebar.header("로딩된 파일 정보"); st.sidebar.info(f"목표: {target_filename}" if target_filename else "파일 없음"); st.sidebar.info(f"수율: {yield_filename}" if yield_filename else "파일 없음"); st.sidebar.info(f"가동률: {util_filename}" if util_filename else "파일 없음"); st.sidebar.info(f"불량: {defect_filename}" if defect_filename else "파일 없음")
+def _file_status(key: str, filename: Optional[str]) -> str:
+    if key not in required_data_keys:
+        return "지연 로딩(탭 진입 시)"
+    return filename if filename else "파일 없음"
 
-tab_list = ["📊 일일 생산 현황 보고", "종합 분석", "목표 달성률", "수율 분석", "생산실적 상세조회", "가동률 분석", "불량유형별 분석"]
+st.sidebar.header("로딩된 파일 정보")
+st.sidebar.info(f"목표: {_file_status('target', target_filename)}")
+st.sidebar.info(f"수율: {_file_status('yield', yield_filename)}")
+st.sidebar.info(f"가동률: {_file_status('utilization', util_filename)}")
+st.sidebar.info(f"불량: {_file_status('defect', defect_filename)}")
+
 selected_tab = st.radio("메인 네비게이션", tab_list, key='main_tab_selector', horizontal=True, label_visibility='collapsed')
 
 # === 탭 전환 감지 및 설정 보정 시스템 ===
@@ -1759,6 +1822,11 @@ if selected_tab == "📊 일일 생산 현황 보고":
                 total_production_current = pivot_daily['합계'].sum()
                 total_target_current = df_target_final['목표_총_생산량'].sum() if not df_target_final.empty else 0
                 overall_achievement = (total_production_current / total_target_current * 100) if total_target_current > 0 else 0
+                factory_total_labels = ["A관(1공장)", "C관(2공장)", "S관(3공장)"]
+                factory_total_text = []
+                for factory_label in factory_total_labels:
+                    factory_total_value = pivot_daily[factory_label].sum() if factory_label in pivot_daily.columns else 0
+                    factory_total_text.append(f"{factory_label}: {factory_total_value:,.0f}개")
                 
                 col_summary1, col_summary2, col_summary3 = st.columns(3)
                 with col_summary1:
@@ -1766,6 +1834,14 @@ if selected_tab == "📊 일일 생산 현황 보고":
                     st.metric(f"🎯 {month_label} 목표량", f"{total_target_current:,.0f}개")
                 with col_summary2:
                     st.metric(f"🏭 {month_label} 총 생산량", f"{total_production_current:,.0f}개")
+                    st.markdown(
+                        (
+                            f"<p style='font-size:0.8rem; color:#6b7280; margin-top:-8px; line-height:1.45;'>"
+                            f"{'<br>'.join(factory_total_text)}"
+                            f"</p>"
+                        ),
+                        unsafe_allow_html=True
+                    )
                 with col_summary3:
                     st.metric(f"📊 {month_label} 달성률", f"{overall_achievement:.1f}%")
                 
@@ -4117,7 +4193,10 @@ elif selected_tab == "종합 분석":
                     st.session_state["overall_yield_range"] = (float(slider_min), float(slider_max))
                 _sync_range_session("overall_yield_range", (float(slider_min), float(slider_max)), 0.0, 100.0)
                 yield_range = st.slider("종합 수율(%) 축 범위", min_value=0.0, max_value=100.0, step=1.0, format="%.0f%%", key="overall_yield_range")
-            with control_cols_2[1]: chart_height = st.slider("차트 높이 조절", 400, 1000, 700, 50, key="overall_chart_height")
+            with control_cols_2[1]:
+                if "overall_chart_height" not in st.session_state:
+                    st.session_state["overall_chart_height"] = 700
+                chart_height = st.slider("차트 높이 조절", min_value=400, max_value=1000, step=50, key="overall_chart_height")
             with control_cols_2[2]: show_labels = st.toggle("차트 라벨 표시", value=True, key="overall_show_labels")
             with control_cols_2[3]: 
                 # 그래프 설정 옵션

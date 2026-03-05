@@ -46,5 +46,6 @@
         "사출기계코드": true,
         "공정기계코드": true,
         "불량명": true
-    }
+    },
+    "output_format": "csv"
 }
