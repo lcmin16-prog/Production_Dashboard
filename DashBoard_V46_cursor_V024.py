@@ -1325,25 +1325,51 @@ def apply_auto_chart_options(start_date: date, end_date: date):
     st.session_state["_auto_chart_tune_pending"] = True
 
 
+def _to_finite_float(value, fallback: float) -> float:
+    """Return a finite float, falling back when value is NaN/inf/non-numeric."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return float(fallback)
+    return v if np.isfinite(v) else float(fallback)
+
+
 def _sync_range_session(key: str, default_value, min_value, max_value):
-    """range slider 세션값을 현재 허용 범위에 맞게 보정합니다."""
-    current = st.session_state.get(key, default_value)
+    """Clamp a range-slider session value into the current allowed bounds."""
+    min_value = _to_finite_float(min_value, 0.0)
+    max_value = _to_finite_float(max_value, min_value + 1.0)
+    if max_value < min_value:
+        min_value, max_value = max_value, min_value
+
+    if not isinstance(default_value, (list, tuple)) or len(default_value) != 2:
+        default_value = (min_value, max_value)
+
+    def_low = _to_finite_float(default_value[0], min_value)
+    def_high = _to_finite_float(default_value[1], max_value)
+    def_low = max(min_value, min(def_low, max_value))
+    def_high = max(min_value, min(def_high, max_value))
+    if def_low > def_high:
+        def_low, def_high = min_value, max_value
+
+    current = st.session_state.get(key, (def_low, def_high))
     if not isinstance(current, (list, tuple)) or len(current) != 2:
-        current = default_value
+        current = (def_low, def_high)
 
-    low = max(min_value, min(current[0], max_value))
-    high = max(min_value, min(current[1], max_value))
+    low = _to_finite_float(current[0], def_low)
+    high = _to_finite_float(current[1], def_high)
+    low = max(min_value, min(low, max_value))
+    high = max(min_value, min(high, max_value))
     if low > high:
-        low, high = default_value
+        low, high = def_low, def_high
 
-    if isinstance(default_value[0], int):
+    int_mode = isinstance(default_value[0], int) and isinstance(default_value[1], int)
+    if int_mode:
         low, high = int(round(low)), int(round(high))
     else:
         low, high = float(low), float(high)
 
     st.session_state[key] = (low, high)
 
-# --- 대시보드 UI 시작 ---
 st.title("👑 지능형 생산 대시보드 V105")
 
 tab_list = ["📊 일일 생산 현황 보고", "종합 분석", "목표 달성률", "수율 분석", "생산실적 상세조회", "가동률 분석", "불량유형별 분석"]
@@ -3449,13 +3475,30 @@ elif selected_tab == "목표 달성률":
                                 
                                 with setting_cols[1]:
                                     with st.expander("달성률 축 범위 조절", expanded=False):
-                                        min_rate_val = df_detail_resampled['달성률(%)'].min()
-                                        max_rate_val = df_detail_resampled['달성률(%)'].max()
-                                        
+                                        rate_values = pd.to_numeric(df_detail_resampled['달성률(%)'], errors='coerce')
+                                        rate_values = rate_values[np.isfinite(rate_values)]
+                                        if rate_values.empty:
+                                            min_rate_val, max_rate_val = 0.0, 100.0
+                                        else:
+                                            min_rate_val = float(rate_values.min())
+                                            max_rate_val = float(rate_values.max())
+
                                         buffer = (max_rate_val - min_rate_val) * 0.1 if max_rate_val > min_rate_val else 5.0
                                         slider_min = max(0.0, min_rate_val - buffer)
                                         slider_max = max_rate_val + buffer
-                                        rate_slider_max = max(150.0, round(slider_max, -1))
+                                        if not np.isfinite(slider_min):
+                                            slider_min = 0.0
+                                        if not np.isfinite(slider_max):
+                                            slider_max = 150.0
+
+                                        rate_slider_max = float(max(150.0, round(slider_max, -1)))
+                                        if (not np.isfinite(rate_slider_max)) or rate_slider_max <= 0:
+                                            rate_slider_max = 150.0
+
+                                        slider_min = float(max(0.0, min(slider_min, rate_slider_max)))
+                                        slider_max = float(max(0.0, min(slider_max, rate_slider_max)))
+                                        if slider_min > slider_max:
+                                            slider_min, slider_max = 0.0, min(100.0, rate_slider_max)
                                         _sync_range_session(
                                             "detail_rate_range_slider",
                                             (float(slider_min), float(slider_max)),
