@@ -1177,6 +1177,50 @@ def get_year_boundaries(reference_date: Optional[date], min_data_date: date, max
     return start, end
 
 
+def _coerce_to_date(value: Any) -> Optional[date]:
+    """지원되는 날짜형 값을 date로 변환하고 실패하면 None을 반환합니다."""
+    if isinstance(value, date):
+        return value
+    parsed = pd.to_datetime(value, errors='coerce')
+    if pd.isna(parsed):
+        return None
+    if isinstance(parsed, pd.Timestamp):
+        return parsed.date()
+    return None
+
+
+def normalize_date_range(raw_value: Any, min_data_date: date, max_data_date: date) -> Tuple[date, date]:
+    """날짜 범위를 정렬하고 데이터 범위 내로 보정합니다."""
+    if min_data_date > max_data_date:
+        min_data_date, max_data_date = max_data_date, min_data_date
+
+    default_range = (min_data_date, max_data_date)
+    if not isinstance(raw_value, (list, tuple)) or len(raw_value) != 2:
+        return default_range
+
+    start_date = _coerce_to_date(raw_value[0])
+    end_date = _coerce_to_date(raw_value[1])
+    if start_date is None or end_date is None:
+        return default_range
+
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    start_date = max(start_date, min_data_date)
+    end_date = min(end_date, max_data_date)
+    if start_date > end_date:
+        return default_range
+
+    return start_date, end_date
+
+
+def ensure_valid_date_range_state(min_data_date: date, max_data_date: date, key: str = 'date_range') -> Tuple[date, date]:
+    """date_input 사용 전후로 세션 상태의 날짜 범위를 안전하게 유지합니다."""
+    normalized = normalize_date_range(st.session_state.get(key), min_data_date, max_data_date)
+    st.session_state[key] = normalized
+    return normalized
+
+
 def reset_filters(min_data_date, max_data_date, reference_date=None):
     """집계 기준을 월별로 두고, 조회 연도를 기준으로 기간을 재설정합니다."""
     start, end = get_year_boundaries(
@@ -1438,6 +1482,12 @@ if 'date_range' not in st.session_state or 'agg_level' not in st.session_state:
     min_date_global, max_date_global = (all_dates.min().date(), all_dates.max().date()) if not all_dates.empty else (date.today(), date.today())
     if 'date_range' not in st.session_state: st.session_state.date_range = (min_date_global, max_date_global)
     if 'agg_level' not in st.session_state: st.session_state.agg_level = '월별'
+
+if 'date_range' in st.session_state:
+    all_dfs = [df_target_orig, df_yield_orig, df_utilization_orig, df_defect_orig]
+    all_dates = pd.concat([d['date'] for d in all_dfs if d is not None and not d.empty and 'date' in d.columns]).dropna()
+    min_date_global, max_date_global = (all_dates.min().date(), all_dates.max().date()) if not all_dates.empty else (date.today(), date.today())
+    st.session_state.date_range = normalize_date_range(st.session_state.get('date_range'), min_date_global, max_date_global)
 
 if 'range_reference_date' not in st.session_state:
     default_reference = st.session_state.date_range[1] if 'date_range' in st.session_state else date.today()
@@ -2387,9 +2437,16 @@ def create_shared_filter_controls(df_for_current_tab):
         if "분석" not in selected_tab: header_title = f"{selected_tab} 분석"
         st.header(header_title, anchor=False)
 
+    safe_start_date, safe_end_date = ensure_valid_date_range_state(min_date_global, max_date_global)
     filter_cols = st.columns([6, 1, 3.5])
     with filter_cols[0]:
-        st.date_input("조회할 기간을 선택하세요", min_value=min_date_global, max_value=max_date_global, key='date_range')
+        st.date_input(
+            "조회할 기간을 선택하세요",
+            min_value=min_date_global,
+            max_value=max_date_global,
+            value=(safe_start_date, safe_end_date),
+            key='date_range'
+        )
         quick_button_specs = [
             ("당월", "this_month"),
             ("당분기", "this_quarter"),
@@ -2422,13 +2479,8 @@ def create_shared_filter_controls(df_for_current_tab):
         st.markdown("<div style='padding-top: 28px;'></div>", unsafe_allow_html=True)
         st.radio("집계 기준", options=['일별', '주간별', '월별', '분기별', '반기별', '년도별'], key='agg_level', horizontal=True)
 
-    date_range_value = st.session_state.get('date_range')
     agg_level = st.session_state.get('agg_level', '월별')
-
-    if isinstance(date_range_value, (list, tuple)) and len(date_range_value) == 2:
-        start_date, end_date = date_range_value
-    else:
-        start_date, end_date = min_date_global, max_date_global
+    start_date, end_date = safe_start_date, safe_end_date
 
     final_start_date = max(start_date, min_date_global)
     final_end_date = min(end_date, max_date_global)
