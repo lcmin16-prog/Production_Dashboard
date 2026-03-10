@@ -2436,7 +2436,6 @@ def create_shared_filter_controls(df_for_current_tab):
             "조회할 기간을 선택하세요",
             min_value=min_date_global,
             max_value=max_date_global,
-            value=normalize_date_range(st.session_state.get('date_range'), min_date_global, max_date_global),
             key='date_range'
         )
         quick_button_specs = [
