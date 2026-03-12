@@ -2805,7 +2805,7 @@ if selected_tab == "📊 일일 생산 현황 보고":
                 valid_mask = (monthly_summary['작업일수'] > 0) & (monthly_summary['데이터일수'] > 0)
                 monthly_summary['목표수량'] = np.where(
                     valid_mask,
-                    (monthly_summary['목표수량'] / monthly_summary['데이터일수']) * monthly_summary['작업일수'],
+                    (monthly_summary['목표수량'] / monthly_summary['작업일수']) * monthly_summary['작업일수'],
                     0
                 )
                 
@@ -6460,3 +6460,4 @@ elif selected_tab == "생산실적 상세조회":
         
         # 다운로드 섹션 추가
         create_download_section(df_filtered, "생산실적상세조회", agg_level, start_date, end_date)
+
